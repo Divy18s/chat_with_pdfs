@@ -12,7 +12,7 @@ services:
     env_file: [.env]
     environment:
       MONGO_URI: mongodb://mongo:27017
-      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+      GROQ_MODEL: ${GROQ_MODEL:-qwen/qwen3.8-27b}
     depends_on: [mongo, redis]
     volumes: ["./backend/data:/app/backend/data"]
   worker:

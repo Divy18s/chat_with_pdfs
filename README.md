@@ -29,7 +29,7 @@ Open **http://localhost:8000/** in your browser:
 Put your Groq API key in `.env` (or copy from `.env.example`):
 ```bash
 GROQ_API_KEY=gsk_your_key_here
-GROQ_MODEL=openai/gpt-oss-120b
+GROQ_MODEL=qwen/qwen3.8-27b
 ```
 
 ### Database & Vector Storage (Zero-Docker Ready)

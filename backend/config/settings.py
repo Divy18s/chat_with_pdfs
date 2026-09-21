@@ -59,10 +59,8 @@ def _load_groq_key():
     return os.environ.get('GROQ_API_KEY', '')
 
 GROQ_API_KEY = os.environ.get('GROQ_API_KEY') or _load_groq_key()
-# NOTE (Sep 2026): Groq decommissioned qwen-qwq-32b / qwen3-32b / llama-3.3-70b on free tier.
-# Verified working on your key: openai/gpt-oss-120b, openai/gpt-oss-20b.
-# Override anytime: GROQ_MODEL=qwen3-32b (if re-enabled) in .env / env var.
-GROQ_MODEL = os.environ.get('GROQ_MODEL', 'openai/gpt-oss-120b')
+# Default LLM model: Qwen 3.8 27B on Groq
+GROQ_MODEL = os.environ.get('GROQ_MODEL', 'qwen/qwen3.8-27b')
 GROQ_BASE_URL = os.environ.get('GROQ_BASE_URL', 'https://api.groq.com/openai/v1')
 MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017')
 MONGO_DB = os.environ.get('MONGO_DB', 'chatpdfs')
