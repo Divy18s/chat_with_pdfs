@@ -24,7 +24,7 @@ Open http://localhost:8000/ — upload PDF, ask, citations `[doc p.page]`.
 - `POST /api/chat` `{"question": "...", "doc_id": "..."}` → `{answer, citations}`
 - `GET /api/chat/stream?q=...&doc_id=...` → SSE word tokens + citations
 
-## Docker (needs Docker Desktop — not installed on this PC, YAML validated only)
+## Docker
 ```
 docker compose up --build
 # frontend :3000, api :8000 (/api/docs), mongo :27017, redis :6379
@@ -48,19 +48,3 @@ Celery worker target in compose for prod) + `frontend` (Next.js 15 scaffold) + `
   chunks); images → CLIP visual vector + BLIP caption + page-context words.
 - Any signal failing → graceful fallback down to sparse-only. `/api/health`
   reports `dense/embed_model/embed_dim/vision/rerank`.
-
-## System design (for interview)
-Upload → Django Ninja → disk/S3 → threaded parse (ThreadPoolExecutor per page,
-thread per file on multi-upload; Celery+Redis in Docker) → content-aware chunk
-(text 800/120 recursive + heading prefix | table = 1 whole markdown chunk, never split |
-code 600/80 line-preserving | image → [IMAGE p.N] proxy vectors) →
-hybrid RRF top-5 (dense MiniLM + TF-IDF, CrossEncoder rerank optional) filtered by chat.doc_ids
-(Qdrant HNSW + BGE-M3 = Docker/prod swap) → Groq chat/completions, plain answers → SSE stream.
-Mongo: chats{doc_ids}, documents{chat_id,breakdown}, chunks{doc_id,block}, messages{chat_id}.
-Stateless api/worker scale independently.
-Research: RAG (Lewis 2020); Recursive splitting (LangChain) + section-prefix (LlamaIndex);
-table-aware (Unstructured/LlamaIndex; TAPAS/TableLlama); semantic-chunking (Kamradt),
-Late Chunking — Jina AI 2024, RAPTOR hierarchical 2024 (documented next step);
-Lost-in-the-Middle → rerank; HyDE for vague queries; Self-RAG/CRAG retry loop (stretch);
-ColPali-vision skipped (scanned PDFs only). Verified: ruled tables → `[TABLE]` markdown
-chunk; borderless tables → text fallback (still cited by page).
