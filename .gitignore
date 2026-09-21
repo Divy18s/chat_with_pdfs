@@ -36,6 +36,7 @@ backend/data/vectors/*
 !backend/data/vectors/.gitkeep
 backend/data/*.json
 backend/data/*.npy
+backend/data/qdrant/
 
 # Node / Next.js
 node_modules/

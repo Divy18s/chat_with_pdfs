@@ -130,6 +130,15 @@ def list_documents(chat_id=None):
         rows = [r for r in rows if r.get('chat_id') == chat_id]
     return list(reversed(rows))
 
+def get_document(doc_id):
+    db = mongo_db()
+    if db:
+        return db.documents.find_one({'id': doc_id}, {'_id': 0})
+    for d in _load(_docs_json):
+        if d['id'] == doc_id:
+            return d
+    return None
+
 # ---------- chunks ----------
 def save_chunks(doc_id, chunks):
     """chunks: list of {text, page, block}"""

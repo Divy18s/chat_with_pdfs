@@ -70,13 +70,60 @@ def encode(texts):
         raise RuntimeError('dense encoder unavailable')
     return np.asarray(m.encode(list(texts), normalize_embeddings=True), dtype=np.float32)
 
+_qdrant = None
+def get_qdrant():
+    """Embedded Qdrant client singleton (zero external services required)."""
+    global _qdrant
+    if _qdrant is not None:
+        return _qdrant
+    try:
+        from django.conf import settings
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import VectorParams, Distance
+        qdrant_dir = settings.DATA_DIR / 'qdrant'
+        qdrant_dir.mkdir(parents=True, exist_ok=True)
+        client = QdrantClient(path=str(qdrant_dir))
+        if not client.collection_exists('pdf_chunks'):
+            client.create_collection(
+                'pdf_chunks',
+                vectors_config=VectorParams(size=dim(), distance=Distance.COSINE)
+            )
+        _qdrant = client
+        return _qdrant
+    except Exception:
+        return None
+
+def qdrant_available():
+    return get_qdrant() is not None
+
 def index_doc(doc_id, texts):
-    """Encode chunk texts in batches, save .npy. Returns {dense, dim, n}."""
+    """Encode chunk texts, save to Embedded Qdrant HNSW and local .npy. Returns {dense, dim, n, qdrant}."""
     if not texts:
         return {'dense': False}
     V = encode(texts)
+    # 1. Save local array for fast fallback
     np.save(str(vec_dir() / f'{doc_id}.npy'), V)
-    return {'dense': True, 'dim': int(V.shape[1]), 'n': int(V.shape[0])}
+    
+    # 2. Upsert into Embedded Qdrant with payload
+    qdrant_ok = False
+    try:
+        qc = get_qdrant()
+        if qc is not None:
+            from qdrant_client.models import PointStruct
+            import uuid
+            points = []
+            for idx, (vec, txt) in enumerate(zip(V, texts)):
+                pid = str(uuid.uuid5(uuid.NAMESPACE_DNS, f"{doc_id}_{idx}"))
+                points.append(PointStruct(
+                    id=pid,
+                    vector=vec.tolist(),
+                    payload={'doc_id': doc_id, 'idx': idx, 'text': txt[:1000]}
+                ))
+            qc.upsert(collection_name='pdf_chunks', points=points)
+            qdrant_ok = True
+    except Exception:
+        pass
+    return {'dense': True, 'dim': int(V.shape[1]), 'n': int(V.shape[0]), 'qdrant': qdrant_ok}
 
 def delete_docs(doc_ids):
     for d in doc_ids or []:
@@ -86,6 +133,18 @@ def delete_docs(doc_ids):
                 p.unlink()
         except Exception:
             pass
+    try:
+        qc = get_qdrant()
+        if qc is not None and doc_ids:
+            from qdrant_client.models import Filter, FieldCondition, MatchAny, FilterSelector
+            qc.delete(
+                collection_name='pdf_chunks',
+                points_selector=FilterSelector(
+                    filter=Filter(must=[FieldCondition(key='doc_id', match=MatchAny(any=list(doc_ids)))])
+                )
+            )
+    except Exception:
+        pass
 
 def _load_doc_matrix(doc_id):
     p = vec_dir() / f'{doc_id}.npy'

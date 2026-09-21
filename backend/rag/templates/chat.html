@@ -1,110 +1,364 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Chat with PDFs</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<style>
-  :root{--ink:#111;--mut:#6b7280;--line:#e5e5e5}
-  *{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
-  body{background:#fff;color:var(--ink)}
-  .side{border-right:1px solid var(--line)}
-  .panel{border-left:1px solid var(--line)}
-  .chatitem{border:1px solid transparent;border-radius:12px;padding:8px 10px;cursor:pointer;font-size:13px}
-  .chatitem:hover{background:#f5f5f5}
-  .chatitem.active{background:#111;color:#fff}
-  .bubble{border-radius:16px;padding:10px 14px;max-width:85%;white-space:pre-wrap;font-size:14px;line-height:1.55}
-  .u{background:#111;color:#fff;margin-left:auto}
-  .a{background:#f5f5f5;border:1px solid var(--line)}
-  .pill{display:flex;align-items:center;gap:8px;background:#111;color:#fff;border-radius:999px;
-    padding:12px 28px;font-weight:600;box-shadow:0 10px 25px rgba(0,0,0,.25);cursor:pointer;border:none}
-  .pill:hover{background:#000;transform:translateY(-1px)}
-  .doc{border:1px solid var(--line);border-radius:12px;padding:8px 10px;font-size:12px}
-  .tag{font-size:10px;border:1px solid var(--line);border-radius:999px;padding:1px 8px;color:var(--mut)}
-  input,button{outline:none}
-</style></head>
-<body class="h-screen flex overflow-hidden">
-<!-- LEFT: chats -->
-<aside class="side w-64 shrink-0 p-4 flex flex-col gap-3 bg-white">
-  <div class="font-bold text-lg tracking-tight">Chat with PDFs</div>
-  <div class="text-xs text-neutral-500" id="health"></div>
-  <button onclick="newChat()" class="pill justify-center" style="padding:10px 18px;font-size:14px">+ New chat</button>
-  <div id="chats" class="flex flex-col gap-1 overflow-auto"></div>
-  <div class="mt-auto text-[11px] text-neutral-400">Each chat keeps its own PDFs.<br>Nothing is shared across chats.</div>
-</aside>
-<!-- CENTER: conversation -->
-<main class="flex-1 flex flex-col min-w-0">
-  <div class="px-6 py-3 border-b flex items-center gap-3">
-    <div id="title" class="font-semibold">Select or create a chat</div>
-    <span id="count" class="tag"></span>
-    <button id="delbtn" onclick="delCur()" title="Delete this chat + its PDFs"
-      class="ml-auto text-xs border rounded-full px-3 py-1 text-neutral-500 hover:text-white hover:bg-black hover:border-black">Delete chat</button>
-  </div>
-  <div id="chat" class="flex-1 overflow-auto px-6 py-6 flex flex-col gap-3 bg-white"></div>
-  <div class="p-4 border-t flex gap-2 bg-white">
-    <input id="q" class="flex-1 border rounded-full px-5 py-3 text-sm" style="border-color:var(--line)"
-      placeholder="Ask about this chat's PDFs…" onkeydown="if(event.key==='Enter')ask()">
-    <button onclick="ask()" class="pill" style="padding:12px 26px">Send</button>
-  </div>
-</main>
-<!-- RIGHT: upload (minimal, like reference) -->
-<aside class="panel w-80 shrink-0 p-6 hidden md:flex flex-col items-center gap-4 bg-white">
-  <div class="font-semibold self-start">Documents in this chat</div>
-  <label class="pill mt-2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
-    Upload<input id="pdf" type="file" accept=".pdf" multiple class="hidden" onchange="upload()"></label>
-  <div class="text-xs text-neutral-500 -mt-2" id="ustatus">PDF only · threaded ingest</div>
-  <div id="docs" class="w-full flex flex-col gap-2 overflow-auto"></div>
-  <div class="mt-auto w-full text-[11px] text-neutral-400 border rounded-xl p-3">Tables are kept whole.<br>Text 800/120 · Code 600/80 · Images cited by page.</div>
-</aside>
-<script>
-let cur=null;
-async function health(){const j=await (await fetch('/api/health')).json();
-document.getElementById('health').innerText=`${j.model} · ${j.mongo?'Mongo':'local'}`;}
-async function loadChats(){const j=await (await fetch('/api/chats')).json();
-const box=document.getElementById('chats');box.innerHTML='';
-j.chats.forEach(c=>{const d=document.createElement('div');d.className='chatitem'+(c.id===cur?' active':'');
-d.style.display='flex';d.style.justifyContent='space-between';d.style.alignItems='center';
-const s=document.createElement('span');s.innerText=`${c.title} · ${c.doc_ids.length}`;s.style.flex='1';s.onclick=()=>select(c.id);
-const x=document.createElement('button');x.innerText='×';x.title='Delete chat + its PDFs';
-x.style.cssText='margin-left:8px;border-radius:999px;width:22px;height:22px;line-height:1;'+(c.id===cur?'color:#fff':'color:#999');
-x.onclick=(e)=>{e.stopPropagation();delChat(c.id,c.title);};
-d.appendChild(s);d.appendChild(x);box.appendChild(d);});
-if(!cur&&j.chats.length)select(j.chats[0].id);}
-async function delChat(id,title){if(!confirm(`Delete "${title}" + its PDFs?`))return;
-const r=await fetch(`/api/chats/${id}`,{method:'DELETE'});const j=await r.json();
-if(j.error)return alert(j.error);
-if(cur===id){cur=null;document.getElementById('chat').innerHTML='';document.getElementById('docs').innerHTML='';
-document.getElementById('title').innerText='Select or create a chat';document.getElementById('count').innerText='';}
-loadChats();}
-async function delCur(){if(!cur)return;const t=document.getElementById('title').innerText;delChat(cur,t);}
-async function newChat(){const r=await fetch('/api/chats',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:''})});
-const j=await r.json();cur=j.chat.id;await loadChats();await select(cur);}
-async function select(id){cur=id;await loadChats();
-const j=await (await fetch(`/api/chats/${id}`)).json();
-document.getElementById('title').innerText=j.chat.title;
-document.getElementById('count').innerText=`${j.documents.length} PDFs`;
-document.getElementById('docs').innerHTML=j.documents.map(d=>
-`<div class="doc"><b>${d.name}</b><br><span class="text-neutral-500">${d.pages}p · ${d.chunks} chunks · ${JSON.stringify(d.breakdown||{})}</span></div>`).join('')||'<div class="text-xs text-neutral-400">No PDFs yet — Upload on the right.</div>';
-const box=document.getElementById('chat');box.innerHTML='';
-j.messages.forEach(m=>add(m.role==='user'?'user':'assistant',m.content+mcite(m.citations)));box.scrollTop=box.scrollHeight;}
-function mc(c){return '';}
-function mcite(c){return '';}
-function clean(t){return String(t||'').replace(/【[^】]*】/g,'').replace(/\s*\[doc:[^\]]*\]/gi,'').replace(/\n?\s*—\s*(\[[^\]]*\]\s*)+$/,'').replace(/\n{3,}/g,'\n\n').trim();}
-function add(role,text){const d=document.createElement('div');d.className='bubble '+(role==='user'?'u':'a');
-d.innerText=clean(text);document.getElementById('chat').appendChild(d);
-document.getElementById('chat').scrollTop=1e9;return d;}
-async function upload(){if(!cur)return alert('Create a chat first');
-const fs=document.getElementById('pdf').files;if(!fs.length)return;
-document.getElementById('ustatus').innerText='Indexing… (threaded)';
-const fd=new FormData();fd.append('file',fs[0]);
-const r=await fetch(`/api/chats/${cur}/upload`,{method:'POST',body:fd});const j=await r.json();
-document.getElementById('ustatus').innerText=r.error?('Error: '+r.error):`Done in ${j.total_ms}ms · ${JSON.stringify(j.document.breakdown)}`;
-document.getElementById('pdf').value='';select(cur);}
-async function ask(){const q=document.getElementById('q').value.trim();if(!q||!cur)return alert('Pick a chat first');
-add('user',q);document.getElementById('q').value='';const b=add('assistant','…');
-const es=new EventSource(`/api/chats/${cur}/stream?q=${encodeURIComponent(q)}`);
-let full='',got=false;
-es.onmessage=e=>{if(e.data==='[DONE]'){es.close();if(got)select(cur);return;}
-try{const j=JSON.parse(e.data);if(j.token){got=true;full+=j.token;b.innerText=full;}
-if(j.citations){full+=mc(j.citations);b.innerText=full;}}catch(_){}};
-es.onerror=()=>{es.close();if(!got)b.innerText='[request failed — is runserver still running? check /api/health]';};}
-health();loadChats();
-</script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chat with PDFs — Enterprise RAG</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --ink: #0f172a; --mut: #64748b; --line: #e2e8f0; }
+    * { font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { background: #f8fafc; color: var(--ink); }
+    .chatitem { border-radius: 10px; padding: 9px 12px; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+    .chatitem:hover { background: #f1f5f9; }
+    .chatitem.active { background: #0f172a; color: #fff; font-weight: 500; }
+    .bubble { border-radius: 16px; padding: 12px 16px; max-width: 85%; font-size: 14px; line-height: 1.6; }
+    .bubble.u { background: #0f172a; color: #fff; margin-left: auto; border-bottom-right-radius: 4px; }
+    .bubble.a { background: #ffffff; border: 1px solid var(--line); margin-right: auto; border-bottom-left-radius: 4px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
+    .pill { display: inline-flex; align-items: center; gap: 8px; background: #0f172a; color: #fff; border-radius: 999px;
+            padding: 10px 20px; font-weight: 500; font-size: 13px; cursor: pointer; transition: all 0.15s; }
+    .pill:hover { background: #1e293b; transform: translateY(-1px); }
+    .cite-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 500;
+                 background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; border-radius: 6px;
+                 padding: 2px 8px; cursor: pointer; transition: all 0.15s; }
+    .cite-chip:hover { background: #dbeafe; border-color: #93c5fd; }
+  </style>
+</head>
+<body class="h-screen flex overflow-hidden bg-slate-50">
+
+  <!-- LEFT: Chats & Workspace Sidebar -->
+  <aside class="w-64 shrink-0 border-r border-slate-200 bg-white p-4 flex flex-col gap-3">
+    <div class="flex items-center gap-2">
+      <div class="w-8 h-8 rounded-lg bg-slate-900 text-white flex items-center justify-center font-bold text-sm">RAG</div>
+      <div>
+        <div class="font-bold text-sm tracking-tight">Chat with PDFs</div>
+        <div class="text-[11px] text-slate-400" id="health">Connecting…</div>
+      </div>
+    </div>
+
+    <button onclick="newChat()" class="pill justify-center mt-2 w-full">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      New Chat
+    </button>
+
+    <div class="text-xs font-semibold text-slate-400 mt-2 uppercase tracking-wider">Conversations</div>
+    <div id="chats" class="flex flex-col gap-1 overflow-y-auto flex-1"></div>
+
+    <div class="mt-auto border-t border-slate-100 pt-3 text-[11px] text-slate-400 leading-tight">
+      Hybrid RRF · MiniLM + TF-IDF<br>Embedded Qdrant HNSW Vector DB
+    </div>
+  </aside>
+
+  <!-- CENTER: Chat Thread -->
+  <main class="flex-1 flex flex-col min-w-0 bg-white">
+    <!-- Chat Header -->
+    <div class="px-6 py-3.5 border-b border-slate-200 flex items-center gap-3 bg-white">
+      <div>
+        <div id="title" class="font-semibold text-sm text-slate-800">Select or create a chat</div>
+        <div id="count" class="text-xs text-slate-400">0 documents indexed</div>
+      </div>
+      <div class="ml-auto flex items-center gap-2">
+        <button onclick="toggleView('docs')" id="btn-tab-docs" class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium">
+          📁 Documents
+        </button>
+        <button onclick="toggleView('pdf')" id="btn-tab-pdf" class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium">
+          📄 PDF Viewer
+        </button>
+        <button id="delbtn" onclick="delCur()" title="Delete this chat + its PDFs"
+          class="text-xs border border-red-200 text-red-600 hover:bg-red-50 rounded-lg px-2.5 py-1.5 font-medium ml-1">
+          Delete
+        </button>
+      </div>
+    </div>
+
+    <!-- Message Stream -->
+    <div id="chat" class="flex-1 overflow-y-auto p-6 flex flex-col gap-4 bg-slate-50/50"></div>
+
+    <!-- Input Bar -->
+    <div class="p-4 bg-white border-t border-slate-200 flex gap-2 items-center">
+      <input id="q" class="flex-1 border border-slate-300 rounded-full px-5 py-3 text-sm focus:outline-none focus:border-slate-800 transition"
+        placeholder="Ask a question about your documents… (Citations link to PDF)" onkeydown="if(event.key==='Enter')ask()">
+      <button onclick="ask()" class="pill shrink-0" style="padding: 12px 24px;">Send</button>
+    </div>
+  </main>
+
+  <!-- RIGHT PANEL: Split-Screen PDF Viewer & Documents Manager -->
+  <aside id="right-panel" class="w-[520px] lg:w-[600px] shrink-0 border-l border-slate-200 bg-white flex flex-col">
+    <!-- Tab 1: Interactive PDF Viewer -->
+    <div id="view-pdf" class="flex-1 flex flex-col h-full">
+      <div class="p-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="text-xs font-semibold text-slate-700 truncate" id="pdf-doc-title">No PDF Selected</span>
+          <span class="text-[11px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-medium" id="pdf-page-indicator">Page 1</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <a id="pdf-external-btn" href="#" target="_blank" class="text-xs text-slate-500 hover:text-slate-800">Pop out ↗</a>
+        </div>
+      </div>
+      <div class="flex-1 bg-slate-100 relative">
+        <iframe id="pdf-frame" class="w-full h-full border-none" src="about:blank"></iframe>
+        <div id="pdf-empty" class="absolute inset-0 flex flex-col items-center justify-center p-8 text-center text-slate-400">
+          <svg class="w-12 h-12 mb-3 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+          <div class="font-medium text-sm text-slate-600">No PDF Loaded</div>
+          <div class="text-xs mt-1 text-slate-400">Click any <span class="text-blue-600 font-medium">[📄 Source p.X]</span> citation in the chat to open and jump directly to that page.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: Document Ingestion & Management -->
+    <div id="view-docs" class="flex-1 flex flex-col h-full hidden p-6">
+      <div class="font-semibold text-sm text-slate-800">Documents in this chat</div>
+      <label class="pill mt-3 justify-center">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+        Upload PDF
+        <input id="pdf-upload" type="file" accept=".pdf" multiple class="hidden" onchange="upload()">
+      </label>
+      <div class="text-xs text-slate-400 text-center mt-2" id="ustatus">Threaded Ingestion · HNSW Indexing</div>
+
+      <div class="text-xs font-semibold text-slate-400 mt-6 uppercase tracking-wider">Indexed Files</div>
+      <div id="docs-list" class="flex flex-col gap-2 mt-2 overflow-y-auto flex-1"></div>
+
+      <div class="mt-auto border border-slate-200 rounded-xl p-3 bg-slate-50 text-[11px] text-slate-500 leading-normal">
+        <b>Content-Aware Pipeline:</b><br>
+        • Tables kept whole as markdown chunks<br>
+        • Recursive text split (800/120) with header prefix<br>
+        • Real-time SSE streaming with citation attribution
+      </div>
+    </div>
+  </aside>
+
+  <script>
+    let cur = null;
+    let activeTab = 'pdf';
+    let docMap = {};
+
+    function toggleView(tab) {
+      activeTab = tab;
+      document.getElementById('view-pdf').classList.toggle('hidden', tab !== 'pdf');
+      document.getElementById('view-docs').classList.toggle('hidden', tab !== 'docs');
+      document.getElementById('btn-tab-pdf').className = tab === 'pdf' ? 'text-xs px-3 py-1.5 rounded-lg bg-slate-900 text-white font-medium' : 'text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium';
+      document.getElementById('btn-tab-docs').className = tab === 'docs' ? 'text-xs px-3 py-1.5 rounded-lg bg-slate-900 text-white font-medium' : 'text-xs px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 font-medium';
+    }
+
+    async function health() {
+      try {
+        const j = await (await fetch('/api/health')).json();
+        const vdb = j.qdrant ? 'Qdrant HNSW' : 'Dense NumPy';
+        const dbType = j.mongo ? 'MongoDB Atlas' : 'Local JSON';
+        document.getElementById('health').innerText = `${j.model.split('/').pop()} · ${vdb} · ${dbType}`;
+      } catch (_) {
+        document.getElementById('health').innerText = 'Offline';
+      }
+    }
+
+    async function loadChats() {
+      const j = await (await fetch('/api/chats')).json();
+      const box = document.getElementById('chats');
+      box.innerHTML = '';
+      j.chats.forEach(c => {
+        const d = document.createElement('div');
+        d.className = 'chatitem flex items-center justify-between ' + (c.id === cur ? 'active' : '');
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'truncate flex-1';
+        titleSpan.innerText = `${c.title} (${c.doc_ids.length})`;
+        titleSpan.onclick = () => select(c.id);
+
+        const delBtn = document.createElement('button');
+        delBtn.innerText = '×';
+        delBtn.className = 'text-xs rounded-full w-5 h-5 flex items-center justify-center opacity-60 hover:opacity-100 hover:bg-red-500 hover:text-white transition';
+        delBtn.onclick = (e) => { e.stopPropagation(); delChat(c.id, c.title); };
+
+        d.appendChild(titleSpan);
+        d.appendChild(delBtn);
+        box.appendChild(d);
+      });
+      if (!cur && j.chats.length) select(j.chats[0].id);
+    }
+
+    async function delChat(id, title) {
+      if (!confirm(`Delete chat "${title}" and its documents?`)) return;
+      await fetch(`/api/chats/${id}`, { method: 'DELETE' });
+      if (cur === id) {
+        cur = null;
+        document.getElementById('chat').innerHTML = '';
+        document.getElementById('docs-list').innerHTML = '';
+        document.getElementById('title').innerText = 'Select or create a chat';
+        document.getElementById('count').innerText = '';
+        closePdf();
+      }
+      loadChats();
+    }
+
+    async function delCur() {
+      if (!cur) return;
+      const t = document.getElementById('title').innerText;
+      delChat(cur, t);
+    }
+
+    async function newChat() {
+      const r = await fetch('/api/chats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: '' })
+      });
+      const j = await r.json();
+      cur = j.chat.id;
+      await loadChats();
+      await select(cur);
+    }
+
+    async function select(id) {
+      cur = id;
+      await loadChats();
+      const j = await (await fetch(`/api/chats/${id}`)).json();
+      document.getElementById('title').innerText = j.chat.title;
+      document.getElementById('count').innerText = `${j.documents.length} document${j.documents.length === 1 ? '' : 's'} indexed`;
+
+      docMap = {};
+      j.documents.forEach(d => { docMap[d.id] = d.name; docMap[d.name] = d.id; });
+
+      document.getElementById('docs-list').innerHTML = j.documents.map(d => `
+        <div class="border border-slate-200 rounded-lg p-2.5 text-xs bg-white hover:border-slate-400 transition cursor-pointer" onclick="openPdf('${d.id}', '${d.name}', 1)">
+          <div class="font-medium text-slate-800 truncate">${d.name}</div>
+          <div class="text-slate-400 mt-1">${d.pages} pages · ${d.chunks} chunks</div>
+        </div>
+      `).join('') || '<div class="text-xs text-slate-400">No PDFs uploaded yet.</div>';
+
+      const box = document.getElementById('chat');
+      box.innerHTML = '';
+      j.messages.forEach(m => {
+        addMessage(m.role, m.content, m.citations);
+      });
+      box.scrollTop = box.scrollHeight;
+    }
+
+    function openPdf(docId, docName, page) {
+      toggleView('pdf');
+      const frame = document.getElementById('pdf-frame');
+      const empty = document.getElementById('pdf-empty');
+      const title = document.getElementById('pdf-doc-title');
+      const indicator = document.getElementById('pdf-page-indicator');
+      const popout = document.getElementById('pdf-external-btn');
+
+      empty.classList.add('hidden');
+      title.innerText = docName || 'Document';
+      indicator.innerText = `Page ${page || 1}`;
+      const url = `/api/documents/${docId}/pdf#page=${page || 1}`;
+      frame.src = url;
+      popout.href = url;
+    }
+
+    function closePdf() {
+      const frame = document.getElementById('pdf-frame');
+      const empty = document.getElementById('pdf-empty');
+      frame.src = 'about:blank';
+      empty.classList.remove('hidden');
+      document.getElementById('pdf-doc-title').innerText = 'No PDF Selected';
+      document.getElementById('pdf-page-indicator').innerText = 'Page 1';
+    }
+
+    function addMessage(role, text, citations) {
+      const chat = document.getElementById('chat');
+      const d = document.createElement('div');
+      d.className = 'bubble ' + (role === 'user' ? 'u' : 'a');
+
+      const contentDiv = document.createElement('div');
+      contentDiv.innerText = text;
+      d.appendChild(contentDiv);
+
+      if (citations && citations.length > 0) {
+        const citeBox = document.createElement('div');
+        citeBox.className = 'flex flex-wrap gap-1.5 mt-3 pt-2.5 border-t border-slate-100';
+        citations.forEach(c => {
+          const btn = document.createElement('button');
+          btn.className = 'cite-chip';
+          btn.innerHTML = `📄 ${c.doc} <span class="opacity-60">p.${c.page}</span>`;
+          const targetDocId = c.doc_id || docMap[c.doc] || '';
+          btn.onclick = () => openPdf(targetDocId, c.doc, c.page);
+          citeBox.appendChild(btn);
+        });
+        d.appendChild(citeBox);
+      }
+
+      chat.appendChild(d);
+      chat.scrollTop = chat.scrollHeight;
+      return { container: d, contentDiv };
+    }
+
+    async function upload() {
+      if (!cur) return alert('Create or select a chat first');
+      const input = document.getElementById('pdf-upload');
+      if (!input.files.length) return;
+      document.getElementById('ustatus').innerText = 'Processing & Indexing with HNSW…';
+
+      const fd = new FormData();
+      fd.append('file', input.files[0]);
+      try {
+        const r = await fetch(`/api/chats/${cur}/upload`, { method: 'POST', body: fd });
+        const j = await r.json();
+        document.getElementById('ustatus').innerText = r.ok ? `Indexed in ${j.total_ms}ms` : ('Error: ' + j.error);
+        input.value = '';
+        await select(cur);
+        if (j.document) openPdf(j.document.id, j.document.name, 1);
+      } catch (e) {
+        document.getElementById('ustatus').innerText = 'Upload failed: ' + e;
+      }
+    }
+
+    async function ask() {
+      const input = document.getElementById('q');
+      const q = input.value.trim();
+      if (!q || !cur) return alert('Please select a chat and enter a question');
+
+      addMessage('user', q, []);
+      input.value = '';
+
+      const assistantMsg = addMessage('assistant', 'Thinking…', []);
+      const contentEl = assistantMsg.contentDiv;
+      contentEl.innerText = '';
+
+      const es = new EventSource(`/api/chats/${cur}/stream?q=${encodeURIComponent(q)}`);
+      let cites = [];
+
+      es.onmessage = (e) => {
+        if (e.data === '[DONE]') {
+          es.close();
+          if (cites.length > 0) {
+            const citeBox = document.createElement('div');
+            citeBox.className = 'flex flex-wrap gap-1.5 mt-3 pt-2.5 border-t border-slate-100';
+            cites.forEach(c => {
+              const btn = document.createElement('button');
+              btn.className = 'cite-chip';
+              btn.innerHTML = `📄 ${c.doc} <span class="opacity-60">p.${c.page}</span>`;
+              const targetDocId = c.doc_id || docMap[c.doc] || '';
+              btn.onclick = () => openPdf(targetDocId, c.doc, c.page);
+              citeBox.appendChild(btn);
+            });
+            assistantMsg.container.appendChild(citeBox);
+          }
+          return;
+        }
+        try {
+          const j = JSON.parse(e.data);
+          if (j.citations) {
+            cites = j.citations;
+          }
+          if (j.token) {
+            contentEl.innerText += j.token;
+            document.getElementById('chat').scrollTop = document.getElementById('chat').scrollHeight;
+          }
+        } catch (_) {}
+      };
+
+      es.onerror = () => {
+        es.close();
+        if (!contentEl.innerText) contentEl.innerText = '[Failed to connect to streaming API. Ensure server is running.]';
+      };
+    }
+
+    toggleView('pdf');
+    health();
+    loadChats();
+  </script>
+</body>
+</html>

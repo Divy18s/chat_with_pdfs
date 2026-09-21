@@ -60,12 +60,13 @@ def health(request):
         from . import embeddings as emb
         dense, dim = emb.available(), (emb.dim() if emb.available() else 0)
         vision = emb.vision_available()
+        qdrant = emb.qdrant_available()
     except Exception:
-        dense, dim, vision = False, 0, False
+        dense, dim, vision, qdrant = False, 0, False, False
     return {'ok': True, 'model': settings.GROQ_MODEL, 'mongo': db.using_mongo(),
             'groq_key': bool(settings.GROQ_API_KEY),
             'dense': dense, 'embed_model': settings.EMBED_MODEL, 'embed_dim': dim,
-            'vision': vision, 'rerank': settings.USE_RERANK == '1'}
+            'vision': vision, 'rerank': settings.USE_RERANK == '1', 'qdrant': qdrant}
 
 # ---------- chats ----------
 @api.get('/chats')
@@ -136,23 +137,44 @@ def chat_stream_s(request, chat_id: str, q: str = ''):
     ch = db.get_chat(chat_id) or {}
     hits = retrieve(q, doc_ids=ch.get('doc_ids', []))
     names = {d['id']: d['name'] for d in db.list_documents(chat_id)}
-    cites = [{'doc': names.get(h['doc_id'], h['doc_id']), 'page': h['page'],
+    cites = [{'doc': names.get(h['doc_id'], h['doc_id']), 'doc_id': h['doc_id'], 'page': h['page'],
               'block': h.get('block', 'text'), 'score': round(h['score'], 3)} for h in hits]
-    try:
-        full = groq_client.chat(build_messages(q, hits, names))
-    except Exception as e:
-        full = f'[RAG error] {e}'
-    # persist BEFORE streaming so the UI reload on [DONE] finds the messages
-    if q:
-        db.save_message('user', q, '', [], chat_id)
-        db.save_message('assistant', full, '', cites, chat_id)
 
     def gen():
-        yield f"data: {json.dumps({'citations': [{'doc': names.get(h['doc_id'], h['doc_id']), 'page': h['page'], 'block': h.get('block', 'text')} for h in hits]})}\n\n"
-        for w in full.split():
-            yield f"data: {json.dumps({'token': w + ' '})}\n\n"
+        yield f"data: {json.dumps({'citations': cites})}\n\n"
+        full_tokens = []
+        if q:
+            db.save_message('user', q, '', [], chat_id)
+            messages = build_messages(q, hits, names)
+            try:
+                for token in groq_client.stream_chat(messages):
+                    full_tokens.append(token)
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+            except Exception as e:
+                err_msg = f"[Streaming error: {e}]"
+                full_tokens.append(err_msg)
+                yield f"data: {json.dumps({'token': err_msg})}\n\n"
+            full_answer = ''.join(full_tokens)
+            db.save_message('assistant', full_answer, '', cites, chat_id)
         yield 'data: [DONE]\n\n'
     return StreamingHttpResponse(gen(), content_type='text/event-stream')
+
+# ---------- PDF serving for interactive viewer ----------
+@api.get('/documents/{doc_id}/pdf')
+def get_document_pdf(request, doc_id: str):
+    doc = db.get_document(doc_id)
+    if not doc:
+        return api.create_response(request, {'error': 'Document not found'}, status=404)
+    file_path = settings.PDF_DIR / doc['name']
+    if not file_path.exists():
+        candidates = list(settings.PDF_DIR.glob(f"*{doc['name']}*"))
+        if not candidates:
+            return api.create_response(request, {'error': 'PDF file missing on disk'}, status=404)
+        file_path = candidates[0]
+    from django.http import FileResponse
+    res = FileResponse(open(file_path, 'rb'), content_type='application/pdf')
+    res['Content-Disposition'] = f'inline; filename="{doc["name"]}"'
+    return res
 
 # ---------- legacy global endpoints (back-compat) ----------
 @api.get('/documents')
@@ -182,7 +204,7 @@ def chat(request, data: ChatIn):
     hits = retrieve(q, data.doc_id or None)
     names = {d['id']: d['name'] for d in db.list_documents()}
     answer = groq_client.chat(build_messages(q, hits, names))
-    cites = [{'doc': names.get(h['doc_id'], h['doc_id']), 'page': h['page'],
+    cites = [{'doc': names.get(h['doc_id'], h['doc_id']), 'doc_id': h['doc_id'], 'page': h['page'],
               'block': h.get('block', 'text'), 'score': round(h['score'], 3)} for h in hits]
     db.save_message('user', q, data.doc_id or '', [])
     db.save_message('assistant', answer, data.doc_id or '', cites)
@@ -192,18 +214,23 @@ def chat(request, data: ChatIn):
 def chat_stream(request, q: str = '', doc_id: str = ''):
     hits = retrieve(q, doc_id or None)
     names = {d['id']: d['name'] for d in db.list_documents()}
-    cites = [{'doc': names.get(h['doc_id'], h['doc_id']), 'page': h['page']} for h in hits]
-    try:
-        full = groq_client.chat(build_messages(q, hits, names))
-    except Exception as e:
-        full = f'[RAG error] {e}'
-    if q:
-        db.save_message('user', q, doc_id or '', [])
-        db.save_message('assistant', full, doc_id or '', cites)
+    cites = [{'doc': names.get(h['doc_id'], h['doc_id']), 'doc_id': h['doc_id'], 'page': h['page']} for h in hits]
 
     def gen():
-        yield f"data: {json.dumps({'citations': [{'doc': names.get(h['doc_id'], h['doc_id']), 'page': h['page']} for h in hits]})}\n\n"
-        for w in full.split():
-            yield f"data: {json.dumps({'token': w + ' '})}\n\n"
+        yield f"data: {json.dumps({'citations': cites})}\n\n"
+        full_tokens = []
+        if q:
+            db.save_message('user', q, doc_id or '', [])
+            messages = build_messages(q, hits, names)
+            try:
+                for token in groq_client.stream_chat(messages):
+                    full_tokens.append(token)
+                    yield f"data: {json.dumps({'token': token})}\n\n"
+            except Exception as e:
+                err_msg = f"[Streaming error: {e}]"
+                full_tokens.append(err_msg)
+                yield f"data: {json.dumps({'token': err_msg})}\n\n"
+            full_answer = ''.join(full_tokens)
+            db.save_message('assistant', full_answer, doc_id or '', cites)
         yield 'data: [DONE]\n\n'
     return StreamingHttpResponse(gen(), content_type='text/event-stream')
