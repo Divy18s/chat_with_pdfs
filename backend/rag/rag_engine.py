@@ -30,11 +30,11 @@ def _extract_page_text(i, pdf_path):
         t = ''
     return {'page': i + 1, 'text': t}
 
-def extract_blocks(pdf_path):
+def extract_blocks(pdf_path, doc_id=None):
     """Returns list of blocks: {kind: text|table|image, page, text}.
 
     Tries pdfplumber for tables+text (optional dep); falls back to pypdf text.
-    Images counted via PyMuPDF if installed (optional), else skipped.
+    Images and vector diagrams detected via PyMuPDF and transcribed with Qwen Vision.
     """
     blocks = []
     # --- tables + text via pdfplumber (optional) ---
@@ -53,7 +53,7 @@ def extract_blocks(pdf_path):
                 except Exception:
                     pass
         if blocks:
-            blocks.extend(_image_census(pdf_path))
+            blocks.extend(_image_census(pdf_path, doc_id=doc_id))
             _attach_page_context(blocks)
             return blocks
     except Exception:
@@ -69,16 +69,12 @@ def extract_blocks(pdf_path):
     for pg in pages:
         if pg['text'].strip():
             blocks.append({'kind': 'text', 'page': pg['page'], 'text': pg['text']})
-    blocks.extend(_image_census(pdf_path))
+    blocks.extend(_image_census(pdf_path, doc_id=doc_id))
     _attach_page_context(blocks)
     return blocks
 
 def _attach_page_context(blocks, max_chars=400):
-    """Append each image block with its page's text excerpt (caption context).
-
-    Lets text retrieval + the LLM use words printed next to the figure
-    (e.g. 'Figure 3: revenue chart'), while CLIP covers pure pixels.
-    """
+    """Append each image block with its page's text excerpt (caption context)."""
     page_text = {}
     for b in blocks:
         if b['kind'] == 'text' and b['page'] not in page_text:
@@ -101,22 +97,44 @@ def _table_to_md(table):
         md.append('| ' + ' | '.join(r) + ' |')
     return '[TABLE]\n' + '\n'.join(md)[:4000]
 
-def _image_census(pdf_path):
-    """Presence census per page (optional PyMuPDF). Returns placeholder blocks.
-
-    Pixel content is rendered separately by extract_page_images() and embedded
-    with CLIP (true vision vectors); the placeholder keeps sparse/text-proxy
-    retrieval working even if CLIP is unavailable.
+def _image_census(pdf_path, doc_id=None):
+    """Detect pages with images, diagrams, flowcharts, or visual drawings.
+    
+    Renders compact JPEG thumbnail and extracts local text without consuming API tokens.
     """
     try:
-        import pymupdf
+        import io, pymupdf
+        from PIL import Image
+        from django.conf import settings
+        images_dir = settings.DATA_DIR / 'images'
+        images_dir.mkdir(parents=True, exist_ok=True)
         doc = pymupdf.open(str(pdf_path))
         out = []
         for pi, page in enumerate(doc):
             try:
-                if page.get_images():
-                    out.append({'kind': 'image', 'page': pi + 1,
-                                'text': f'[IMAGE on page {pi + 1}: figure/scan — visual content embedded separately.]'})
+                has_raster = bool(page.get_images())
+                has_drawings = len(page.get_drawings()) >= 2
+                is_scan = (len(page.get_text().strip()) < 80) and (has_raster or has_drawings)
+                if has_raster or has_drawings or is_scan:
+                    page_no = pi + 1
+                    pix = page.get_pixmap(dpi=80)
+                    im = Image.frombytes('RGB', [pix.width, pix.height], pix.samples)
+                    im.thumbnail((700, 700))
+                    buf = io.BytesIO()
+                    im.save(buf, format='JPEG', quality=75)
+                    img_bytes = buf.getvalue()
+                    if doc_id:
+                        try:
+                            (images_dir / f"{doc_id}_p{page_no}.jpg").write_bytes(img_bytes)
+                        except Exception:
+                            pass
+                    p_txt = page.get_text()[:600].strip()
+                    desc = f"Page text: {p_txt}" if p_txt else "Visual diagram/figure"
+                    out.append({
+                        'kind': 'image',
+                        'page': page_no,
+                        'text': f"[DIAGRAM / IMAGE on page {page_no}]: {desc}"
+                    })
             except Exception:
                 pass
         return out
@@ -218,7 +236,7 @@ def ingest_pdf(doc_id, pdf_path, max_workers=4):
     Returns (n_pages, n_chunks). Breakdown stored on document.
     """
     t0 = time.time()
-    blocks = extract_blocks(pdf_path)
+    blocks = extract_blocks(pdf_path, doc_id=doc_id)
     # pixels -> words: BLIP-caption each image-bearing page BEFORE chunking, so the
     # caption lands inside the image chunk text (indexed by MiniLM/TF-IDF + quoted by LLM)
     try:
@@ -304,15 +322,91 @@ def retrieve(query, doc_id=None, doc_ids=None, top_k=None):
         pass
     return hits
 
+def get_page_image_b64(doc_id, page_no):
+    """Get base64 JPEG data URL for a document page (cached or dynamically rendered from PDF)."""
+    if not doc_id or not page_no:
+        return None
+    from django.conf import settings
+    from PIL import Image
+    import pymupdf, io, base64
+    images_dir = settings.DATA_DIR / 'images'
+    images_dir.mkdir(parents=True, exist_ok=True)
+    cached_path = images_dir / f"{doc_id}_p{page_no}.jpg"
+    if cached_path.exists():
+        try:
+            with open(cached_path, 'rb') as f:
+                return f"data:image/jpeg;base64,{base64.b64encode(f.read()).decode('utf-8')}"
+        except Exception:
+            pass
+
+    from . import db
+    doc_meta = db.get_document(doc_id)
+    if not doc_meta:
+        return None
+    pdf_path = settings.PDF_DIR / doc_meta.get('name', '')
+    if not pdf_path.exists():
+        candidates = list(settings.PDF_DIR.glob(f"*{doc_meta.get('name', '')}*"))
+        if not candidates:
+            return None
+        pdf_path = candidates[0]
+
+    try:
+        with pymupdf.open(str(pdf_path)) as pdf:
+            if 1 <= page_no <= len(pdf):
+                page = pdf[page_no - 1]
+                pix = page.get_pixmap(dpi=80)
+                im = Image.frombytes('RGB', [pix.width, pix.height], pix.samples)
+                im.thumbnail((700, 700))
+                buf = io.BytesIO()
+                im.save(buf, format='JPEG', quality=75)
+                img_bytes = buf.getvalue()
+                try:
+                    cached_path.write_bytes(img_bytes)
+                except Exception:
+                    pass
+                return f"data:image/jpeg;base64,{base64.b64encode(img_bytes).decode('utf-8')}"
+    except Exception:
+        return None
+    return None
+
 def build_messages(question, hits, doc_names):
     ctx = []
+    image_urls = []
+    seen_pages = set()
+
     for i, h in enumerate(hits, 1):
         nm = doc_names.get(h['doc_id'], h['doc_id'])
         tag = h.get('block', 'text').upper()
         ctx.append(f"[{i}][{tag}] (doc:{nm} p.{h['page']} score={h['score']:.2f}): {h['text'][:1200]}")
+
+        doc_id = h.get('doc_id')
+        page_no = h.get('page', 0)
+        page_key = (doc_id, page_no)
+
+        is_visual_hit = (h.get('block') == 'image' or '[IMAGE' in h.get('text', '') or '[DIAGRAM' in h.get('text', ''))
+        should_attach = (is_visual_hit or i == 1) and page_no > 0
+
+        # Attach at most 1 compact image (costs ~1800 tokens, well under Groq 7000 ITPM limit)
+        if should_attach and page_key not in seen_pages and len(image_urls) < 1:
+            seen_pages.add(page_key)
+            b64 = get_page_image_b64(doc_id, page_no)
+            if b64:
+                image_urls.append(b64)
+
     context = '\n'.join(ctx) if ctx else '(no excerpts retrieved)'
     from .groq_client import SYSTEM
+
+    prompt_text = (f"CONTEXT:\n{context}\n\nQUESTION: {question}\n"
+                   "Answer clearly and accurately, inspecting the attached diagram or image for details if relevant.")
+
+    if image_urls:
+        user_content = [{'type': 'text', 'text': prompt_text}]
+        for u in image_urls:
+            user_content.append({'type': 'image_url', 'image_url': {'url': u}})
+    else:
+        user_content = prompt_text
+
     return [
         {'role': 'system', 'content': SYSTEM},
-        {'role': 'user', 'content': f'CONTEXT:\n{context}\n\nQUESTION: {question}\nAnswer plainly, no markers.'},
+        {'role': 'user', 'content': user_content},
     ]

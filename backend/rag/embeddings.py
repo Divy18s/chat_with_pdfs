@@ -200,7 +200,8 @@ def rrf_fuse(*rank_lists, k=60):
 
 _VISUAL_WORDS = frozenset(
     'image figure chart photo picture diagram plot graph screenshot scan scanned '
-    'look looks shown shows depict depicts display red blue green yellow black white color'.split())
+    'look looks shown shows depict depicts display red blue green yellow black white color '
+    'architecture flowchart pipeline flow workflow box component block drawing illustration visual'.split())
 
 def visual_intent(query):
     import re as _re

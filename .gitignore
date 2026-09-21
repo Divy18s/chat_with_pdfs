@@ -37,6 +37,7 @@ backend/data/vectors/*
 backend/data/*.json
 backend/data/*.npy
 backend/data/qdrant/
+backend/data/images/
 
 # Node / Next.js
 node_modules/

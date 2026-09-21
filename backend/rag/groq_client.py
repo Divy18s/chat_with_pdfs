@@ -2,7 +2,7 @@
 import json, urllib.request, urllib.error
 from django.conf import settings
 
-def chat(messages, temperature=0.2, max_tokens=800):
+def chat(messages, temperature=0.2, max_tokens=800, retries=1):
     key = settings.GROQ_API_KEY
     if not key:
         raise RuntimeError('GROQ_API_KEY missing. Put your gsk_ key in chat_with_pdfs/.env')
@@ -23,6 +23,18 @@ def chat(messages, temperature=0.2, max_tokens=800):
             body = json.loads(r.read().decode())
         return body['choices'][0]['message']['content']
     except urllib.error.HTTPError as e:
+        if e.code == 429 and retries > 0:
+            import time
+            time.sleep(3)
+            # If vision exceeded tokens, fallback to text-only context
+            text_only_msgs = []
+            for m in messages:
+                if isinstance(m.get('content'), list):
+                    txt_parts = [p['text'] for p in m['content'] if p.get('type') == 'text']
+                    text_only_msgs.append({'role': m['role'], 'content': '\n'.join(txt_parts)})
+                else:
+                    text_only_msgs.append(m)
+            return chat(text_only_msgs, temperature, max_tokens, retries=0)
         detail = e.read().decode()[:800]
         raise RuntimeError(f'Groq {e.code}: {detail}')
 
@@ -61,9 +73,31 @@ def stream_chat(messages, temperature=0.2, max_tokens=800):
             except Exception:
                 continue
     except urllib.error.HTTPError as e:
-        detail = e.read().decode()[:800]
-        yield f"[Groq Error {e.code}: {detail}]"
+        if e.code == 429:
+            import time
+            time.sleep(2)
+            text_only_msgs = []
+            for m in messages:
+                if isinstance(m.get('content'), list):
+                    txt_parts = [p['text'] for p in m['content'] if p.get('type') == 'text']
+                    text_only_msgs.append({'role': m['role'], 'content': '\n'.join(txt_parts)})
+                else:
+                    text_only_msgs.append(m)
+            try:
+                for tok in stream_chat(text_only_msgs, temperature, max_tokens):
+                    yield tok
+                return
+            except Exception:
+                yield "\n[Rate limit reached on free tier. Please wait a moment before sending another query.]"
+        else:
+            detail = e.read().decode()[:800]
+            yield f"[Groq Error {e.code}: {detail}]"
 
-SYSTEM = ('You are a PDF assistant. Answer naturally from the provided CONTEXT excerpts, '
-          'like ChatGPT — plain sentences, no citation markers, no brackets, no footers. '
-          'If the answer is not in the context, just say you cannot find it in the uploaded PDFs.')
+SYSTEM = ('You are an expert multimodal PDF assistant. You can read both text excerpts '
+          'and attached page images/diagrams from the uploaded PDF documents. '
+          'When answering: '
+          '1. If page images/diagrams are attached, inspect them carefully to extract exact labels, '
+          'diagram boxes, flowchart steps, arrows, chart values, tables, and visual relationships. '
+          '2. Answer naturally and directly like ChatGPT — plain sentences, no citation brackets, no footers. '
+          '3. If the answer cannot be determined from either the text excerpts or the attached images, '
+          'clearly state that the information is not present in the document.')
