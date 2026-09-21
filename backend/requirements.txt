@@ -1,0 +1,15 @@
+django>=5.0,<6
+django-ninja>=1.3
+pymongo>=4.6
+pypdf>=4.0
+pdfplumber>=0.10
+pymupdf>=1.23
+scikit-learn>=1.3
+numpy>=1.26
+# Hybrid dense retrieval (MiniLM 384-d, CPU). ~2GB with torch; CPU-only: use
+# --index-url https://download.pytorch.org/whl/cpu for a ~200MB torch.
+# + vision: transformers+Pillow come with sentence-transformers; CLIP ViT-B/32
+# (~350MB) + BLIP captioning (~500MB) download from HF on first image ingest.
+sentence-transformers>=3.0
+torch>=2.0
+python-dotenv>=1.0

@@ -1,0 +1,32 @@
+services:
+  mongo:
+    image: mongo:7
+    ports: ["27017:27017"]
+    volumes: [mongo_data:/data/db]
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  api:
+    build: {context: ., dockerfile: Dockerfile.api}
+    ports: ["8000:8000"]
+    env_file: [.env]
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+      GROQ_MODEL: ${GROQ_MODEL:-openai/gpt-oss-120b}
+    depends_on: [mongo, redis]
+    volumes: ["./backend/data:/app/backend/data"]
+  worker:
+    build: {context: ., dockerfile: Dockerfile.api}
+    command: celery -A config worker --loglevel=info
+    env_file: [.env]
+    environment:
+      MONGO_URI: mongodb://mongo:27017
+    depends_on: [mongo, redis, api]
+  frontend:
+    build: {context: ., dockerfile: Dockerfile.frontend}
+    ports: ["3000:3000"]
+    environment:
+      NEXT_PUBLIC_API: http://localhost:8000/api
+    depends_on: [api]
+volumes:
+  mongo_data:
