@@ -18,7 +18,15 @@
 flowbox/.style={rectangle,rounded corners,draw=black,thick,fill=black!4,
   text width=6.2cm,minimum height=1.05cm,align=center,font=\small},
 flowstore/.style={ellipse,draw=black,thick,fill=black!8,align=center,font=\small},
-flowarr/.style={thick,->,>=stealth}
+flowarr/.style={thick,->,>=stealth},
+badbox/.style={rectangle,rounded corners,draw=red!70!black,thick,fill=red!5,
+  text width=6.4cm,minimum height=0.8cm,align=center,font=\footnotesize},
+goodbox/.style={rectangle,rounded corners,draw=teal!70!black,thick,fill=teal!5,
+  text width=6.4cm,minimum height=0.8cm,align=center,font=\footnotesize},
+diagbox/.style={rectangle,rounded corners,draw=blue!70!black,thick,fill=blue!5,
+  text width=5.2cm,minimum height=0.8cm,align=center,font=\footnotesize},
+diagsmall/.style={rectangle,rounded corners,draw=black!70,thick,fill=black!4,
+  text width=4.4cm,minimum height=0.75cm,align=center,font=\scriptsize}
 }
 \title{Chat with PDFs: an Enterprise Multimodal RAG System\\{\large Architecture, Technology Stack \& System Design}}
 \author{Project: \texttt{github.com/Divy18s/chat\_with\_pdfs} (2023 $\rightarrow$ 2026 Rebuild)}
@@ -213,12 +221,74 @@ Engineering Dimension & Naive / Conventional RAG & Our Content-Aware Architectur
 \item \textbf{The Atomic Whole-Table Rule:} By treating each table as an atomic Markdown chunk, the LLM always receives the complete schema. It can reliably execute arithmetic, compare quarters, and maintain 100\% financial fidelity.
 \end{itemize}
 
+\begin{center}
+\begin{tikzpicture}[node distance=0.65cm,auto]
+% Left Track: Naive RAG
+\node[font=\bfseries\footnotesize\color{red!70!black}] (h_naive) at (0,0) {Naive / Conventional RAG};
+\node[badbox,below=0.25cm of h_naive] (n1) {\textbf{Flat Text Extraction}\\ \scriptsize Left-to-right character dump; column bounds destroyed};
+\node[badbox,below=of n1] (n2) {\textbf{Blind Slicing (e.g. 500 chars)}\\ \scriptsize Fixed-character boundary cuts directly through rows};
+\node[badbox,below=of n2] (n3) {\textbf{Orphaned Number Chunks}\\ \scriptsize Chunk 1: Header names only\\ Chunk 2: \emph{``\$45.2M, 18\%''} (no schema/context)};
+\node[badbox,below=of n3] (n4) {\textbf{Dense Semantic Average}\\ \scriptsize Numbers blurred; dense vector loses cell associations};
+\node[badbox,below=of n4] (n5) {\textbf{Catastrophic Hallucination}\\ \scriptsize LLM confuses revenue, expenses, or debt};
+
+\draw[flowarr,red!70!black] (n1) -- (n2);
+\draw[flowarr,red!70!black] (n2) -- (n3);
+\draw[flowarr,red!70!black] (n3) -- (n4);
+\draw[flowarr,red!70!black] (n4) -- (n5);
+
+% Right Track: Content-Aware Architecture
+\node[font=\bfseries\footnotesize\color{teal!70!black}] (h_ours) at (7.6,0) {Our Content-Aware Architecture};
+\node[goodbox,below=0.25cm of h_ours] (c1) {\textbf{2D Bounding Box Extraction}\\ \scriptsize \texttt{pdfplumber} maps geometric cell coordinates};
+\node[goodbox,below=of c1] (c2) {\textbf{GitHub Markdown Serialization}\\ \scriptsize Reconstructs rows \& columns with explicit pipe syntax};
+\node[goodbox,below=of c2] (c3) {\textbf{Atomic Whole-Table Rule}\\ \scriptsize Entire table preserved as one unit; never split mid-row};
+\node[goodbox,below=of c3] (c4) {\textbf{Dual-Signal Indexing}\\ \scriptsize MiniLM (topic context) + TF-IDF (exact figures \& terms)};
+\node[goodbox,below=of c4] (c5) {\textbf{100\% Factual Grounding}\\ \scriptsize Schema bound to values; LLM accurately reasons \& computes};
+
+\draw[flowarr,teal!70!black] (c1) -- (c2);
+\draw[flowarr,teal!70!black] (c2) -- (c3);
+\draw[flowarr,teal!70!black] (c3) -- (c4);
+\draw[flowarr,teal!70!black] (c4) -- (c5);
+\end{tikzpicture}
+\end{center}
+
 \subsubsection{Why Specialized Diagram Handling Matters}
 \begin{itemize}[leftmargin=1.0cm]
 \item \textbf{Detecting Vector Graphics:} Standard PDF libraries only look for raster images (JPEG/PNG), completely missing vector drawings (lines, rectangles, and flowchart arrows created with PDF draw operators). Our census uses \texttt{page.get\_drawings()} to identify visual schematics and trigger rendering.
 \item \textbf{Dual-Signal Retrieval:} CLIP enables sub-millisecond visual vector search without OCR, while BLIP generates textual descriptions that allow traditional TF-IDF keyword search to match diagrams.
 \item \textbf{Direct Visual Reasoning with Token Budgeting:} By passing downscaled high-resolution thumbnails ($700\times700$, $\sim$1,800 tokens) to the multimodal LLM, the model inspects arrow directions, legends, and chart axes directly while strictly adhering to cloud API rate limits (7,000 ITPM).
 \end{itemize}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.6cm,auto]
+% Input
+\node[flowbox,text width=8.5cm] (input) {\textbf{Document Page with Visual Schematics}\\\scriptsize Vector drawings, flowcharts, architectures, plots, photos};
+
+% Detection Stage (Vector vs Raster)
+\node[diagsmall,below left=0.5cm and -0.7cm of input] (vec_det) {\textbf{Vector Drawing Census}\\\scriptsize \texttt{PyMuPDF} \texttt{get\_drawings()}\\Detects lines, rects, flowchart paths};
+\node[diagsmall,below right=0.5cm and -0.7cm of input] (ras_det) {\textbf{Raster Image Extraction}\\\scriptsize \texttt{page.get\_images()}\\Extracts embedded bitmap graphics};
+
+% Render
+\node[diagbox,text width=7.2cm,below=2.1cm of input] (thumb) {\textbf{High-Resolution Thumbnail Rendering}\\\scriptsize Normalized $700\times700$ RGB render ($\sim$1,800 token budget) in \texttt{images/}};
+
+% Dual Signal Indexing
+\node[diagbox,text width=4.6cm,below left=0.6cm and -0.5cm of thumb] (clip) {\textbf{CLIP ViT-B/32 (Vision)}\\\scriptsize 512-d visual vectors in \texttt{.clip.npy}\\Sub-ms zero-shot visual similarity};
+\node[diagbox,text width=4.6cm,below right=0.6cm and -0.5cm of thumb] (blip) {\textbf{BLIP-base (Captioning)}\\\scriptsize Natural language description\\Indexed in TF-IDF lexical matrix};
+
+% Retrieval & LLM
+\node[diagbox,text width=7.6cm,below=2.2cm of thumb] (rrf) {\textbf{Hybrid RRF Fusion with Visual Intent Filter}\\\scriptsize Visual keywords (``diagram'', ``chart'') + CLIP $> 0.20$ promote image chunk};
+\node[goodbox,text width=8.2cm,below=0.5cm of rrf] (llm) {\textbf{Multimodal Visual Reasoning (\texttt{qwen/qwen3.8-27b})}\\\scriptsize Full base64 thumbnail injected into LLM context window\\LLM inspects arrows, labels, axes \& color codes directly};
+
+\draw[flowarr] (input.south) -| (vec_det.north);
+\draw[flowarr] (input.south) -| (ras_det.north);
+\draw[flowarr] (vec_det.south) |- (thumb.west);
+\draw[flowarr] (ras_det.south) |- (thumb.east);
+\draw[flowarr] (thumb.south) -| (clip.north);
+\draw[flowarr] (thumb.south) -| (blip.north);
+\draw[flowarr] (clip.south) |- (rrf.west);
+\draw[flowarr] (blip.south) |- (rrf.east);
+\draw[flowarr] (rrf.south) -- (llm.north);
+\end{tikzpicture}
+\end{center}
 
 
 \subsection{Step 5 -- Dense and vision indexing (Embedded Qdrant)}
