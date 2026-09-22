@@ -223,6 +223,35 @@ Property & \textbf{all-MiniLM-L6-v2} (Dense) & \textbf{TF-IDF} (Sparse Lexical) 
 \item \textbf{Embedded Qdrant HNSW Indexing:} Chunks are indexed with 384-d Cosine distance in an Embedded Qdrant collection (\texttt{pdf\_chunks}). Qdrant constructs an approximate nearest neighbour graph (HNSW) allowing sub-linear vector retrieval ($O(\log N)$) with metadata payload filtering on \texttt{doc\_id} to guarantee strict multi-tenant chat workspace isolation.
 \end{itemize}
 
+\subsection{Content-Aware Embedding Matrix \& Query Symmetry}
+A critical requirement in multimodal RAG is mapping heterogeneous content types to specialized embedding encoders, while enforcing strict mathematical symmetry during search:
+
+{\footnotesize
+\begin{center}
+\begin{tabular}{@{}lp{3.6cm}p{4.0cm}p{4.0cm}@{}}
+\toprule
+Content Type & Model / Mechanism & Indexing Storage & Query Matcher \\
+\midrule
+\textbf{Plain Text} & MiniLM-L6-v2 + TF-IDF & 384-d vector (Qdrant) + sparse bag-of-words & MiniLM query vector + TF-IDF query transform \\
+\textbf{Tables} & MiniLM-L6-v2 + TF-IDF & 384-d vector over whole Markdown serialization & MiniLM semantic search + exact table header tokens \\
+\textbf{Code Blocks} & MiniLM-L6-v2 + TF-IDF & 384-d vector preserving syntax indentation lines & MiniLM semantic query + exact keyword tokens \\
+\textbf{Diagrams} & \textbf{Dual-Signal Strategy:} & & \\
+\quad \emph{1. Visual Pixels} & CLIP ViT-B/32 (Vision Tower) & 512-d visual vector (\texttt{.clip.npy}) & \textbf{CLIP Text Tower} (shared 512-d space) \\
+\quad \emph{2. Text Caption} & BLIP-base $\rightarrow$ MiniLM & 384-d text vector (Qdrant) + TF-IDF tokens & MiniLM query vector + TF-IDF sparse matching \\
+\bottomrule
+\end{tabular}
+\end{center}
+}
+
+\begin{itemize}[leftmargin=1.0cm]
+\item \textbf{The Symmetry Rule of Vector Search:} A vector from Model A ($384\text{-d}$) can never be compared against a vector from Model B ($512\text{-d}$). The vector spaces occupy entirely different mathematical manifolds. Every query must be projected through the identical encoder used at indexing time.
+\item \textbf{CLIP Dual-Tower Alignment:} CLIP bridges the modality gap between text queries and diagram images through two distinct neural towers trained under contrastive loss:
+\begin{equation}
+\text{Similarity}(q, \text{image}) = \frac{\text{CLIP}_{\text{text}}(q) \cdot \text{CLIP}_{\text{vision}}(\text{image})}{\|\text{CLIP}_{\text{text}}(q)\| \|\text{CLIP}_{\text{vision}}(\text{image})\|}
+\end{equation}
+During document ingestion, the \textbf{Vision Tower} encodes pixel arrays. At search time, the user's textual query is projected via the \textbf{Text Tower} into the exact same 512-dimensional manifold, enabling instantaneous cosine similarity ranking over visual flowcharts and schematics.
+\end{itemize}
+
 
 \subsection{Step 6 -- Hybrid retrieval with RRF}
 \textbf{Tech:} TF-IDF sparse cosine + Qdrant MiniLM dense cosine + CLIP image cosine fused via Reciprocal Rank Fusion ($k=60$, \texttt{hybrid\_order}).\\
