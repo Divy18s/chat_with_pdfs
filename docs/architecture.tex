@@ -147,6 +147,39 @@ The system supports two execution paradigms:
 \textbf{Does:} Visual pages generate downscaled 700$\times$700 thumbnails. BLIP assigns descriptive captions (e.g., \emph{``flowchart diagram comparing latency across models''}). Both captions and high-resolution thumbnail filepaths are attached to the chunk metadata.\\
 \textbf{Handles:} Pages without visual drawings are skipped. BLIP failure safely falls back to CLIP vectors and direct visual LLM routing.
 
+\subsection{Deep-dive: Why both CLIP and BLIP? (Visual Search vs. Captioning)}
+A foundational architectural question in this system is why two distinct vision models (\texttt{clip-vit-base-patch32} and \texttt{blip-image-captioning-base}) are downloaded locally when both are categorized as vision models. Although both process visual data, their mathematical formulations, output spaces, and functional roles in the RAG lifecycle are entirely distinct:
+
+{\footnotesize
+\begin{center}
+\begin{tabular}{@{}lp{3.8cm}p{4.2cm}p{3.8cm}@{}}
+\toprule
+Dimension & \textbf{CLIP} (ViT-B/32) & \textbf{BLIP} (Captioning Base) & \textbf{Qwen 3.8 27B Vision} \\
+\midrule
+\textbf{Architecture} & Dual-Encoder (Contrastive) & Encoder-Decoder (Generative) & Autoregressive Vision-LLM \\
+\textbf{Output} & 512-d Vector (\emph{numbers}) & Natural Language (\emph{text}) & Natural Language (\emph{text}) \\
+\textbf{Can write text?} & No (mute vector projection) & Yes (short descriptive captions) & Yes (in-depth reasoning) \\
+\textbf{Vector search} & Yes (fast matrix cosine) & No (generative text output) & No (inference-only LLM) \\
+\textbf{Execution speed} & Sub-millisecond dot-product & $\sim$100--300ms per image & $\sim$1--3s cloud API stream \\
+\textbf{Role in Pipeline} & \textbf{The Searcher (Retrieval)} & \textbf{The Annotator (Indexing)} & \textbf{The Analyst (Reasoning)} \\
+\bottomrule
+\end{tabular}
+\end{center}
+}
+
+\begin{itemize}[leftmargin=1.0cm]
+\item \textbf{CLIP (The Searcher):} CLIP does not generate words or sentences. Instead, it maps images and arbitrary text queries into the exact same 512-dimensional vector space. During upload, every extracted diagram or page render is embedded into a 512-d visual vector. When a user enters a query like \emph{``show me the loss curve''}, CLIP encodes the query text into that shared space and performs rapid cosine similarity matching. This provides sub-millisecond visual search even if the diagram contains zero OCR or textual labels.
+\item \textbf{BLIP (The Annotator):} BLIP is an image-to-text generative model. It inspects image pixels and produces natural language sentences (e.g., \emph{``a diagram of the system architecture with Redis and MongoDB''}). This text is attached to the chunk as \texttt{Visual: [caption]}, enabling traditional TF-IDF keyword search to match visual content and providing human-readable audit logs in the database.
+\item \textbf{Collaboration with Qwen 3.8 Vision:} The three models form a coordinated pipeline:
+\begin{enumerate}[leftmargin=0.8cm]
+\item \textbf{BLIP} annotates the diagram into searchable keywords during ingestion.
+\item \textbf{CLIP} rapidly finds \emph{which} diagram to retrieve among thousands of pages using vector similarity.
+\item \textbf{Qwen 3.8 27B Vision} receives the actual image pixels of the retrieved diagram to perform deep technical reasoning, reading exact labels, data points, and arrows to answer user questions.
+\end{enumerate}
+\item \textbf{Modular Toggling:} Both models are decoupled and can be toggled via environment variables: \texttt{USE\_VISION=0} skips CLIP visual vectors, while \texttt{USE\_CAPTION=0} skips BLIP captioning to accelerate document ingest.
+\end{itemize}
+
+
 \subsection{Step 4 -- Content-aware chunking}
 \textbf{Tech:} Recursive text splitter with boundary preservation; whole-table preservation; code line detection (\texttt{chunk\_block}).\\
 \textbf{Does:} Text is split into 800-character chunks with 120-character overlap preserving sentence boundaries; tables form a single atomic chunk to prevent mid-row severance; code is split along line boundaries (600/80); images and diagrams form dedicated visual chunks.\\
