@@ -15,65 +15,79 @@ Modern 2026 stack: `backend/` + `frontend/` + Docker.
 
 ---
 
-## Quick Start (No Docker, No Node Required)
+## Getting Started: Two Ways to Run
 
-Tested and verified on Python 3.11–3.14 on Windows & Linux.
+### Option 1: With Docker (Production Microservices Stack — Recommended)
 
-```bash
-cd backend
-pip install -r requirements.txt
-python manage.py check
-python manage.py runserver 8000
-```
-Open **http://localhost:8000/** in your browser:
-* **Upload PDFs**: Threaded parsing, table extraction, and embedded HNSW indexing.
-* **Real-Time Streaming**: Low-latency token-by-token generation (TTFT < 250ms).
-* **Click-to-Page Citations**: Click any `[📄 Source p.X]` chip in the chat to jump the split-screen PDF viewer directly to that page.
+Run the full containerized stack (Django Ninja API, Celery worker, MongoDB, Redis, and Next.js frontend):
+
+1. **Configure Environment:**
+   ```bash
+   cp .env.example .env
+   # Add your GROQ_API_KEY in .env
+   ```
+
+2. **Launch Stack:**
+   ```bash
+   docker compose up --build
+   ```
+   * **Web Application & UI:** [http://localhost:8000/](http://localhost:8000/) (or Next.js at `:3000`)
+   * **OpenAPI Documentation:** [http://localhost:8000/api/docs](http://localhost:8000/api/docs)
+   * **MongoDB:** `localhost:27017`
+   * **Redis:** `localhost:6379`
+
+3. **Horizontal Worker Scaling (Optional):**
+   ```bash
+   docker compose up --scale worker=3
+   ```
 
 ---
 
-## Configuration (`.env`)
+### Option 2: Without Docker (Local Development / Bare Python)
 
-Put your Groq API key in `.env` (or copy from `.env.example`):
-```bash
-GROQ_API_KEY=gsk_your_key_here
-GROQ_MODEL=qwen/qwen3.8-27b
-```
+Tested and verified on Python 3.11–3.14 on Windows & Linux with zero external daemon requirements:
 
-### Database & Vector Storage (Zero-Docker Ready)
-* **Vector Database**: Runs **Embedded Qdrant** (`DATA_DIR/qdrant`) locally out of the box with HNSW indexing and metadata filtering.
-* **Document & Chat Database**: Connects to **MongoDB Atlas** (cloud) or local MongoDB if available (`MONGO_URI`). If unreachable, transparently falls back to local JSON persistence (`DATA_DIR/db_*.json`).
+1. **Configure Environment:**
+   Create `.env` in the root folder with:
+   ```bash
+   GROQ_API_KEY=gsk_your_key_here
+   GROQ_MODEL=qwen/qwen3.8-27b
+   ```
+
+2. **Install & Run:**
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   python manage.py check
+   python manage.py runserver 8000
+   ```
+
+3. **Open:** [http://localhost:8000/](http://localhost:8000/)
+   * Runs **Embedded Qdrant** (`backend/data/qdrant`) locally out of the box with HNSW indexing and metadata filtering.
+   * Connects to **MongoDB** if available (`MONGO_URI`), or transparently falls back to local JSON persistence (`backend/data/db_*.json`).
 
 ---
 
 ## Benchmark & Retrieval Evaluation
 
-Evaluate retrieval accuracy, hit rates, and latency:
+Evaluate retrieval accuracy, hit rates, and latency across test queries:
 ```bash
 cd backend
 python evaluate_rag.py
 ```
-Outputs automated comparison across:
-* **Hit Rate @ 1, 3, 5**
-* **MRR (Mean Reciprocal Rank)**
-* **Average Retrieval Latency (ms)**
+Outputs automated empirical comparisons across:
+* **Hit Rate @ 1, 3, 5** (Did the correct chunk appear in the top 1, 3, or 5 results?)
+* **MRR (Mean Reciprocal Rank)** (How close to rank #1 was the true source?)
+* **Average Retrieval Latency (ms)** (p50/p95 search speed across sparse, dense, and visual pipelines)
 
 ---
 
-## API Endpoints (OpenAPI Docs at `/api/docs`)
+## API Endpoints (Interactive OpenAPI Docs at `/api/docs`)
 
 * `GET  /api/health` — System health (Qdrant, Dense, Vision, Groq, Mongo status)
-* `GET  /api/chats` & `POST /api/chats` — Session management
-* `POST /api/chats/{chat_id}/upload` — Threaded PDF ingestion
-* `GET  /api/chats/{chat_id}/stream?q=...` — Real-time SSE token stream + citations
-* `GET  /api/documents/{doc_id}/pdf` — Inline PDF serving for interactive viewer
+* `GET  /api/chats` & `POST /api/chats` — Session management & multi-tenant isolation
+* `POST /api/chats/{chat_id}/upload` — Threaded PDF ingestion & content-aware chunking
+* `GET  /api/chats/{chat_id}/stream?q=...` — Real-time SSE token stream + citation chips
+* `GET  /api/documents/{doc_id}/pdf` — Streaming PDF bytes for the split-screen viewer (`#page=N`)
+* `DELETE /api/chats/{chat_id}` — Cascade deletion of chats, vectors, and documents
 
----
-
-## Docker Deployment (Optional)
-
-```bash
-docker compose up --build
-# frontend :3000, api :8000 (/api/docs), mongo :27017, redis :6379
-docker compose up --scale worker=3   # horizontal worker scaling
-```
