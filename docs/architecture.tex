@@ -190,6 +190,39 @@ Dimension & \textbf{CLIP} (ViT-B/32) & \textbf{BLIP} (Captioning Base) & \textbf
 \textbf{Does:} Dense embeddings are indexed into an Embedded Qdrant collection (\texttt{pdf\_chunks}) using Cosine distance and HNSW graph indexing with \texttt{doc\_id} payload filtering. NumPy \texttt{.npy} files are maintained as secondary local backups.\\
 \textbf{Handles:} Operates completely embedded with zero Docker dependency; if Qdrant or PyTorch fails, the pipeline degrades gracefully to TF-IDF sparse retrieval.
 
+\subsection{Deep-dive: Text Embeddings -- MiniLM-L6-v2 vs. Sparse TF-IDF \& Qdrant HNSW}
+Text retrieval forms the foundational backbone of the RAG pipeline. The system couples a dense neural embedding model (\texttt{all-MiniLM-L6-v2}) with a sparse lexical engine (\texttt{scikit-learn} TF-IDF) and indexes dense vectors into Embedded Qdrant:
+
+{\footnotesize
+\begin{center}
+\begin{tabular}{@{}lp{3.6cm}p{4.0cm}p{3.8cm}@{}}
+\toprule
+Property & \textbf{all-MiniLM-L6-v2} (Dense) & \textbf{TF-IDF} (Sparse Lexical) & \textbf{Cloud Embeddings} (e.g., OpenAI) \\
+\midrule
+\textbf{Representation} & 384-d dense float vector & High-dimensional sparse vector & 1536-d dense vector \\
+\textbf{Parameters / Size} & 22M params ($\sim$90\,MB weights) & Non-parametric (corpus dictionary) & Proprietary API \\
+\textbf{Hardware \& Latency} & CPU-native, sub-10ms inference & CPU-native, sub-millisecond & Network roundtrip ($\sim$80--250ms) \\
+\textbf{Semantic Matching} & Paraphrases, synonyms, concepts & Exact tokens, acronyms, code identifiers & High semantic nuance \\
+\textbf{Out-of-Vocabulary} & Sub-word tokens (WordPiece) & Fails on unseen synonyms & Sub-word tokens (cl100k) \\
+\textbf{Operating Cost} & Zero (local execution) & Zero (local execution) & Recurring API token bill \\
+\textbf{Storage Index} & Embedded Qdrant HNSW + \texttt{.npy} & In-memory sparse matrix & Cloud Vector DB (Pinecone/Qdrant) \\
+\bottomrule
+\end{tabular}
+\end{center}
+}
+
+\begin{itemize}[leftmargin=1.0cm]
+\item \textbf{Why all-MiniLM-L6-v2?} MiniLM achieves an exceptional balance between semantic fidelity, compact memory footprint ($\approx$90\,MB), and inference speed. Running entirely on local CPU, it eliminates cloud embedding API costs, enforces offline privacy for sensitive documents, and enables zero-dependency developer onboarding.
+\item \textbf{Dense vs. Sparse Synergy in RRF:}
+\begin{itemize}[leftmargin=0.6cm]
+\item \emph{Dense (MiniLM)} excels at capturing contextual meaning where vocabulary differs: e.g., \emph{``cost reduction''} correctly matches text discussing \emph{``lowering server expenditures''}.
+\item \emph{Sparse (TF-IDF)} excels at exact lexical matching for entities that dense models blur: e.g., technical acronyms (\emph{SSE, HNSW, ITPM}), model names (\emph{qwen3.8-27b}), or error codes (\emph{HTTP 429}).
+\item Reciprocal Rank Fusion ($k=60$) combines these distinct ranking distributions into a unified, robust top-$K$ candidate list.
+\end{itemize}
+\item \textbf{Embedded Qdrant HNSW Indexing:} Chunks are indexed with 384-d Cosine distance in an Embedded Qdrant collection (\texttt{pdf\_chunks}). Qdrant constructs an approximate nearest neighbour graph (HNSW) allowing sub-linear vector retrieval ($O(\log N)$) with metadata payload filtering on \texttt{doc\_id} to guarantee strict multi-tenant chat workspace isolation.
+\end{itemize}
+
+
 \subsection{Step 6 -- Hybrid retrieval with RRF}
 \textbf{Tech:} TF-IDF sparse cosine + Qdrant MiniLM dense cosine + CLIP image cosine fused via Reciprocal Rank Fusion ($k=60$, \texttt{hybrid\_order}).\\
 \textbf{Does:} Three distinct rank lists cast reciprocal votes. Queries with visual intent (e.g., \emph{``chart'', ``diagram'', ``architecture'', ``color''}) with confident CLIP scores ($>0.20$) dynamically promote visual diagram chunks to the top candidates.\\
