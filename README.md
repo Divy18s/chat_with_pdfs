@@ -7,6 +7,14 @@ Modern 2026 stack: `backend/` + `frontend/` + Docker.
 
 ---
 
+## System Architecture & Highlights
+
+* **System Design & Architecture:** Built a containerized microservices app using **Docker Compose**, **Django Ninja** for stateless APIs, and **Celery/Redis** for background processing; implemented **polyglot persistence** (MongoDB for chats + Qdrant HNSW for vectors) with isolated multi-tenant workspaces and complete **cascade deletion**.
+* **Smart Hybrid Search & Reliability:** Created a 3-way hybrid search combining **MiniLM** (semantic meaning), **TF-IDF** (exact keywords), and **CLIP** (diagrams) using **Reciprocal Rank Fusion ($k=60$)**, engineered with a multi-tier **graceful degradation ladder** (automatic fallbacks) so the app never crashes.
+* **Vision, Reasoning & Frontend UX:** Paired **BLIP diagram captions** with **Qwen 27B reasoning** under **token-budget downscaling ($700\times700$)** to prevent API rate limits; built a responsive **Tailwind CSS split-screen UI** with real-time SSE streaming, clickable PDF page citations, and an automated **evaluation benchmark** (Hit Rate/MRR).
+
+---
+
 ## Quick Start (No Docker, No Node Required)
 
 Tested and verified on Python 3.11–3.14 on Windows & Linux.
