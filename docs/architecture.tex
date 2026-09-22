@@ -44,8 +44,8 @@ Database & none & MongoDB (local-JSON fallback) + audit trail \\
 Vector DB & in-memory FAISS (lost on exit) & \textbf{Embedded Qdrant} 384-d Cosine HNSW + local \texttt{.npy} fallback \\
 Retrieval & single dense cosine & Hybrid RRF: Qdrant MiniLM + TF-IDF + CLIP ($k=60$) \\
 Chunking & fixed 1000/200 characters & Content-aware: text / whole-table / code / visual diagram \\
-Vision & none (blind text dump) & CLIP vectors + BLIP captions + \textbf{Direct Vision-LLM reasoning} \\
-LLM & ChatOpenAI default & Groq \texttt{qwen/qwen3.8-27b} multimodal (real-time SSE streaming) \\
+Vision & none (blind text dump) & CLIP visual vectors + BLIP automated captions \\
+LLM & ChatOpenAI default & Groq \texttt{qwen/qwen3.8-27b} reasoning engine (real-time SSE streaming) \\
 Ingest & blocking UI button & ThreadPool pages $\times$ files; Celery + Redis in Docker \\
 Workspaces & none & per-chat workspaces, isolated doc collections, cascade deletion \\
 Evaluation & none & Automated benchmark: Hit Rate @ 1/3/5, MRR, latency suite \\
@@ -70,8 +70,8 @@ Vector DB & \textbf{Embedded Qdrant} (\texttt{qdrant-client}) & 384-d Cosine HNS
 PDF Engine & \texttt{pdfplumber} 0.11, \texttt{pypdf} 6, \texttt{PyMuPDF} 1.28 & Text + table extraction, vector drawing detection (\texttt{get\_drawings}), page thumbnail rendering \\
 Sparse & \texttt{scikit-learn} TF-IDF (1--2 grams) & Exact keyword and entity matching, always available \\
 Dense & \texttt{sentence-transformers} 6, MiniLM-L6-v2 384-d & Semantic sentence embeddings indexed in Qdrant and \texttt{.npy} \\
-Vision & CLIP ViT-B/32; BLIP-base; Vision LLM & Visual embeddings + text captions + direct base64 image routing \\
-LLM Engine & Groq REST API (native SSE streaming) & High-speed generation; default \textbf{\texttt{qwen/qwen3.8-27b}} \\
+Vision & CLIP ViT-B/32; BLIP-base & Visual embeddings + automated diagram text captioning \\
+LLM Engine & Groq REST API (native SSE streaming) & Deep reasoning \& synthesis; default \textbf{\texttt{qwen/qwen3.8-27b}} \\
 Concurrency & \texttt{ThreadPoolExecutor}; Celery + Redis 7 & Parallel page chunking and multi-file document ingestion \\
 Evaluation & Custom benchmark (\texttt{evaluate\_rag.py}) & Automated Hit Rate @ 1/3/5, MRR, and retrieval latency metrics \\
 Deploy & Docker Compose; standalone local dev & Reproducible container stack or embedded zero-Docker local mode \\
@@ -110,7 +110,7 @@ Docs & \LaTeX\ (Tectonic) + TikZ & System architecture and engineering specifica
 \node[flowbox] (q) {1. Question\\\footnotesize user prompt scoped to active chat};
 \node[flowbox,below=of q] (r) {2. 3-Way hybrid retrieval\\\footnotesize TF-IDF, Qdrant HNSW MiniLM, CLIP ViT-B/32 $\rightarrow$ RRF $k=60$};
 \node[flowbox,below=of r] (p) {3. Multimodal prompt construction\\\footnotesize tagged excerpts + direct base64 diagram image routing};
-\node[flowbox,below=of p] (l) {4. Groq Vision LLM\\\footnotesize \texttt{qwen/qwen3.8-27b}, visual reasoning + rate-limit protection};
+\node[flowbox,below=of p] (l) {4. Groq Reasoning LLM\\\footnotesize \texttt{qwen/qwen3.8-27b}, deep reasoning and synthesis};
 \node[flowbox,below=of l] (s) {5. Real-time SSE stream \& navigation\\\footnotesize live token streaming, interactive citation chips to PDF \#page};
 \node[flowstore,right=1.8cm of r] (scope) {Tenant Isolation\\filtered by doc\_ids\\in Qdrant \& Mongo};
 \node[flowstore,right=1.8cm of s] (split) {Split-Screen Viewer\\click citation jumps\\to PDF page};
@@ -154,14 +154,14 @@ A foundational architectural question in this system is why two distinct vision 
 \begin{center}
 \begin{tabular}{@{}lp{3.8cm}p{4.2cm}p{3.8cm}@{}}
 \toprule
-Dimension & \textbf{CLIP} (ViT-B/32) & \textbf{BLIP} (Captioning Base) & \textbf{Qwen 3.8 27B Vision} \\
+Dimension & \textbf{CLIP} (ViT-B/32) & \textbf{BLIP} (Captioning Base) & \textbf{Qwen 3.8 27B} \\
 \midrule
-\textbf{Architecture} & Dual-Encoder (Contrastive) & Encoder-Decoder (Generative) & Autoregressive Vision-LLM \\
+\textbf{Architecture} & Dual-Encoder (Contrastive) & Encoder-Decoder (Generative) & Autoregressive Reasoning LLM \\
 \textbf{Output} & 512-d Vector (\emph{numbers}) & Natural Language (\emph{text}) & Natural Language (\emph{text}) \\
-\textbf{Can write text?} & No (mute vector projection) & Yes (short descriptive captions) & Yes (in-depth reasoning) \\
+\textbf{Can write text?} & No (mute vector projection) & Yes (short descriptive captions) & Yes (multi-step logical reasoning) \\
 \textbf{Vector search} & Yes (fast matrix cosine) & No (generative text output) & No (inference-only LLM) \\
 \textbf{Execution speed} & Sub-millisecond dot-product & $\sim$100--300ms per image & $\sim$1--3s cloud API stream \\
-\textbf{Role in Pipeline} & \textbf{The Searcher (Retrieval)} & \textbf{The Annotator (Indexing)} & \textbf{The Analyst (Reasoning)} \\
+\textbf{Role in Pipeline} & \textbf{The Searcher (Retrieval)} & \textbf{The Annotator (Vision)} & \textbf{The Brain (Reasoning)} \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -170,11 +170,11 @@ Dimension & \textbf{CLIP} (ViT-B/32) & \textbf{BLIP} (Captioning Base) & \textbf
 \begin{itemize}[leftmargin=1.0cm]
 \item \textbf{CLIP (The Searcher):} CLIP does not generate words or sentences. Instead, it maps images and arbitrary text queries into the exact same 512-dimensional vector space. During upload, every extracted diagram or page render is embedded into a 512-d visual vector. When a user enters a query like \emph{``show me the loss curve''}, CLIP encodes the query text into that shared space and performs rapid cosine similarity matching. This provides sub-millisecond visual search even if the diagram contains zero OCR or textual labels.
 \item \textbf{BLIP (The Annotator):} BLIP is an image-to-text generative model. It inspects image pixels and produces natural language sentences (e.g., \emph{``a diagram of the system architecture with Redis and MongoDB''}). This text is attached to the chunk as \texttt{Visual: [caption]}, enabling traditional TF-IDF keyword search to match visual content and providing human-readable audit logs in the database.
-\item \textbf{Collaboration with Qwen 3.8 Vision:} The three models form a coordinated pipeline:
+\item \textbf{Collaboration with Qwen 3.8 27B (Reasoning Engine):} The three models form a coordinated pipeline:
 \begin{enumerate}[leftmargin=0.8cm]
-\item \textbf{BLIP} annotates the diagram into searchable keywords during ingestion.
-\item \textbf{CLIP} rapidly finds \emph{which} diagram to retrieve among thousands of pages using vector similarity.
-\item \textbf{Qwen 3.8 27B Vision} receives the actual image pixels of the retrieved diagram to perform deep technical reasoning, reading exact labels, data points, and arrows to answer user questions.
+\item \textbf{BLIP} translates raw diagram pixels into descriptive text keywords during ingestion.
+\item \textbf{CLIP} rapidly identifies \emph{which} diagram to retrieve among thousands of pages using vector similarity.
+\item \textbf{Qwen 3.8 27B} acts as the central reasoning brain: it reads the retrieved text chunks, tables, and BLIP visual descriptions to perform deep multi-step reasoning, reconciling facts, computing figures, and writing the final cited answer.
 \end{enumerate}
 \item \textbf{Modular Toggling:} Both models are decoupled and can be toggled via environment variables: \texttt{USE\_VISION=0} skips CLIP visual vectors, while \texttt{USE\_CAPTION=0} skips BLIP captioning to accelerate document ingest.
 \end{itemize}
@@ -228,10 +228,10 @@ Property & \textbf{all-MiniLM-L6-v2} (Dense) & \textbf{TF-IDF} (Sparse Lexical) 
 \textbf{Does:} Three distinct rank lists cast reciprocal votes. Queries with visual intent (e.g., \emph{``chart'', ``diagram'', ``architecture'', ``color''}) with confident CLIP scores ($>0.20$) dynamically promote visual diagram chunks to the top candidates.\\
 \textbf{Handles:} Pure text questions retrieve semantic text chunks; visual queries pin the corresponding diagram; missing modalities fall out of the RRF equation seamlessly.
 
-\subsection{Step 7 -- Multimodal prompt \& Vision-LLM reasoning}
-\textbf{Tech:} Groq REST API with \texttt{qwen/qwen3.8-27b}; multimodal message formatting (\texttt{rag\_engine.py}, \texttt{groq\_client.py}).\\
-\textbf{Does:} When visual diagram chunks are retrieved, the server encodes the rendered 700$\times$700 PNG into a base64 data URL (\texttt{data:image/png;base64,...}) and routes it directly to Qwen's vision input. The LLM visually inspects the actual diagram pixels rather than relying solely on generated captions.\\
-\textbf{Handles:} Enforces strict rate-limit protection: downscales image resolution to keep vision token consumption under $\sim$1,800 tokens, preventing HTTP 429 errors on Groq free-tier limits (7,000 ITPM).
+\subsection{Step 7 -- Prompt synthesis \& Qwen 3.8 27B reasoning}
+\textbf{Tech:} Groq REST API with \texttt{qwen/qwen3.8-27b}; structured prompt assembly (\texttt{rag\_engine.py}, \texttt{groq\_client.py}).\\
+\textbf{Does:} Top-5 retrieved chunks (text excerpts, full Markdown tables, and BLIP diagram descriptions) are compiled into a structured prompt. Qwen 3.8 27B executes multi-step technical reasoning across sources, resolving facts and doing calculations to write the cited answer.\\
+\textbf{Handles:} Compact prompt serialization prevents token bloat and avoids HTTP 429 rate-limit errors on cloud LLM quotas.
 
 \subsection{Step 8 -- Real-time SSE streaming \& split-screen PDF preview}
 \textbf{Tech:} Native Server-Sent Events (\texttt{StreamingHttpResponse}) + PDF streaming endpoint (\texttt{GET /api/documents/\{doc\_id\}/pdf\#page=N}).\\
@@ -252,12 +252,12 @@ Property & \textbf{all-MiniLM-L6-v2} (Dense) & \textbf{TF-IDF} (Sparse Lexical) 
 \section{System design decisions (interview-ready)}
 \begin{enumerate}[leftmargin=1.2cm]
 \item \textbf{Docker Microservices Architecture \& Polyglot Persistence.} API services operate stateless under Docker Compose with horizontally scalable Celery/Redis background worker pools for compute-heavy ingestion. Implements polyglot persistence: MongoDB for flexible document/chat audit trails, Qdrant HNSW for sub-linear vector queries, and persistent volumes for PDFs and diagram thumbnails. Can also run in-process for zero-dependency local runs.
-\item \textbf{True Multimodal Visual Reasoning over Blind Captions.} Traditional RAG replaces images with static 10-word captions. Our architecture routes full base64 diagram renderings directly into a Vision-LLM (\texttt{qwen/qwen3.8-27b}), allowing accurate visual reasoning over schematics, charts, and architectural diagrams.
-\item \textbf{Token-Aware Rate-Limit Resilience.} Cloud LLM APIs enforce strict token-per-minute limits (e.g., Groq's 7,000 ITPM). By dynamically downscaling diagrams to 700$\times$700, visual token usage is capped at $\sim$1,800 tokens, enabling reliable multimodal inference on free-tier infrastructure without rate limit failures.
+\item \textbf{Decoupled Vision Extraction and High-Capacity LLM Reasoning.} Rather than overloading a single model or passing blind text dumps, the system separates vision from reasoning: BLIP converts diagram pixels to rich contextual descriptions, CLIP indexes visual features, and Qwen 3.8 27B serves as the dedicated reasoning brain to perform multi-step synthesis and calculation.
+\item \textbf{Token-Aware Rate-Limit Resilience.} Cloud LLM APIs enforce strict token-per-minute limits (e.g., Groq's 7,000 ITPM). By formatting concise chunks and using local BLIP/CLIP processing, token usage is strictly budgeted, enabling reliable inference on free-tier infrastructure without rate limit failures.
 \item \textbf{Interactive Split-Screen Citation Navigation.} Borrowing the best UX pattern from NotebookLM, answers cite exact pages. Clicking citation badges instantly navigates the embedded side-by-side PDF previewer to the corresponding page anchor.
 \item \textbf{Strict Per-Chat Workspace Tenant Isolation.} Every vector retrieval and document query filters by \texttt{chat.doc\_ids}. Verified: uploading financial data to Chat A is completely invisible to queries executed in Chat B.
 \item \textbf{Native Real-time SSE Token Streaming.} Token streaming uses native Groq HTTP streaming directly via Python generators, replacing simulated word timers with sub-100ms time-to-first-token (TTFT).
-\item \textbf{Graceful Multi-Stage Degradation Ladder.} The retrieval pipeline degrades predictably: Vision LLM $\rightarrow$ CLIP Cosine $\rightarrow$ Qdrant Dense HNSW $\rightarrow$ TF-IDF Sparse. Missing GPU or offline dependencies never crash the user experience.
+\item \textbf{Graceful Multi-Stage Degradation Ladder.} The retrieval pipeline degrades predictably: CLIP Cosine $\rightarrow$ Qdrant Dense HNSW $\rightarrow$ TF-IDF Sparse. Missing GPU or offline dependencies never crash the user experience.
 \item \textbf{Empirical Evaluation Loop.} Includes an automated evaluation suite calculating Hit Rate @ $K$ and MRR, transforming the codebase from a demo into a quantifiable engineering system.
 \end{enumerate}
 
@@ -273,7 +273,7 @@ RAG, Lewis et al.\ 2020 & Retrieve-then-generate baseline architecture \\
 RRF, Cormack et al.\ 2009 & Reciprocal Rank Fusion ($k=60$) fusing Qdrant dense, TF-IDF sparse, and CLIP visual lists \\
 CLIP, Radford et al.\ 2021 & Contrastive Language-Image Pre-training for shared text--image vector space \\
 BLIP, Li et al.\ 2022 & Bootstrapped language-image pre-training for contextual captioning \\
-Qwen Vision, Bai et al.\ 2023 & Multimodal vision-language reasoning over rendered PDF diagrams and charts \\
+Qwen Reasoning, Bai et al.\ 2023 & High-capacity reasoning LLM for multi-step synthesis across RAG context \\
 HNSW, Malkov \& Yashunin 2018 & Hierarchical Navigable Small World graphs for sub-linear similarity search in Qdrant \\
 Lost in the Middle, Liu et al.\ 2023 & Justification for strict top-$K$ filtering ($K=5$) and position-aware prompt serialization \\
 Self-RAG, Asai et al.\ 2023 & Self-grading and reflection loop on retrieved context (architectural extension) \\
@@ -289,7 +289,7 @@ ColPali, Faysse et al.\ 2024 & Multi-vector vision embeddings for dense document
 \begin{itemize}[leftmargin=1.0cm]
 \item \textbf{System Health \& Vector Indexing:} Verified via \texttt{GET /api/health} reporting \texttt{\{dense: true, dim: 384, vision: true, qdrant: true\}}.
 \item \textbf{Embedded Qdrant HNSW:} Tested chunk ingestion and payload querying; confirmed index files persist in \texttt{backend/data/qdrant/}.
-\item \textbf{Multimodal Vision Reasoning:} Tested on PDF diagrams and vector drawings; verified base64 payload delivery to \texttt{qwen/qwen3.8-27b} with accurate visual question-answering.
+\item \textbf{Multimodal Diagram Processing:} Tested on PDF diagrams and vector drawings; verified BLIP caption generation and CLIP visual vector alignment.
 \item \textbf{Split-Screen PDF Navigation:} Verified \texttt{GET /api/documents/\{doc\_id\}/pdf} returns streaming PDF bytes with \texttt{\#page=N} deep-link navigation.
 \item \textbf{Real-Time Token Streaming:} Verified native SSE streaming from Groq with zero token drop and complete chat history persistence.
 \item \textbf{Evaluation Suite:} Executed \texttt{evaluate\_rag.py} confirming retrieval accuracy and MRR across multimodal benchmark queries.
@@ -297,7 +297,7 @@ ColPali, Faysse et al.\ 2024 & Multi-vector vision embeddings for dense document
 
 % ============================================================
 \section{Thirty-second pitch}
-``ChatGPT and NotebookLM for PDFs, engineered as a full-stack, enterprise-grade system: per-chat isolated workspaces, an async multimodal ingestion pipeline that differentiates text, tables, code, and vector drawings, and a three-way hybrid retriever -- Embedded Qdrant HNSW dense search plus TF-IDF sparse matching plus CLIP visual vectors fused with Reciprocal Rank Fusion ($k=60$). When diagrams are detected, high-resolution renders are routed directly to Qwen 3.8 27B Vision with rate-limit protection for true visual reasoning. Complete with real-time SSE streaming, split-screen PDF preview with interactive citation jumps, and an automated evaluation suite.''
+``ChatGPT and NotebookLM for PDFs, engineered as a full-stack, enterprise-grade system: per-chat isolated workspaces, an async multimodal ingestion pipeline that differentiates text, tables, code, and vector drawings, and a three-way hybrid retriever -- Embedded Qdrant HNSW dense search plus TF-IDF sparse matching plus CLIP visual vectors fused with Reciprocal Rank Fusion ($k=60$). Automated diagram captioning via BLIP is paired with Groq Qwen 27B for deep multi-step technical reasoning, complete with real-time SSE streaming, split-screen PDF preview with interactive citation jumps, and an automated evaluation suite.''
 
 \appendix
 \section{API reference}
