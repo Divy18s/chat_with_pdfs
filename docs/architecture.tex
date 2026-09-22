@@ -186,6 +186,41 @@ Dimension & \textbf{CLIP} (ViT-B/32) & \textbf{BLIP} (Captioning Base) & \textbf
 \textbf{Does:} Text is split into 800-character chunks with 120-character overlap preserving sentence boundaries; tables form a single atomic chunk to prevent mid-row severance; code is split along line boundaries (600/80); images and diagrams form dedicated visual chunks.\\
 \textbf{Handles:} Fragmentary text ($<$20 characters) is discarded; whitespace and table indentation are normalized.
 
+\subsection{Deep-dive: Content-Aware Processing -- Tables \& Diagrams vs. Naive RAG}
+A primary failure mode of conventional RAG systems is treating PDF documents as homogeneous text strings. In reality, modern enterprise documents (financial statements, architectural specifications, scientific papers) encode critical information in 2D tabular grids and visual diagrams:
+
+{\footnotesize
+\begin{center}
+\begin{tabular}{@{}lp{5.0cm}p{6.8cm}@{}}
+\toprule
+Engineering Dimension & Naive / Conventional RAG & Our Content-Aware Architecture \\
+\midrule
+\textbf{Table Extraction} & Flat left-to-right text dump; loses 2D column boundaries & \texttt{pdfplumber} 2D bounding box detection serialized into GitHub Markdown \\
+\textbf{Table Chunking} & Blind fixed character slicing (e.g., 500 characters) & \textbf{Atomic Whole-Table Rule}: entire table kept as single chunk, never split \\
+\textbf{Header Preservation} & Severed: chunks 2--$N$ lack column headers (hallucinations) & Bonded: Markdown syntax preserves column headers for every row \\
+\textbf{Table Indexing} & Single dense embedding blurs exact cells \& numbers & Dual: MiniLM (semantic topic) + TF-IDF (exact cell figures \& headers) \\
+\textbf{Diagram Detection} & Dropped: text extractors ignore drawings entirely & \texttt{PyMuPDF} vector drawing census (\texttt{get\_drawings}) + raster image extraction \\
+\textbf{Diagram Representation} & None or static 5-word generic OCR caption & \textbf{Dual-Signal}: 512-d CLIP visual vectors + descriptive BLIP text captions \\
+\textbf{Visual Reasoning} & Completely blind (LLM cannot inspect diagrams) & Downscaled ($700\times700$) base64 image routing to LLM with token rate budgeting \\
+\bottomrule
+\end{tabular}
+\end{center}
+}
+
+\subsubsection{Why Content-Aware Table Handling Matters}
+\begin{itemize}[leftmargin=1.0cm]
+\item \textbf{The ``Orphaned Number'' Trap:} In naive RAG, cutting a table mid-row isolates cells from their headers. When a chunk containing only \emph{``\$45M, 18\%''} is retrieved, the LLM cannot determine whether \$45M represents revenue, operating expense, or net debt, leading to catastrophic hallucinations.
+\item \textbf{The Atomic Whole-Table Rule:} By treating each table as an atomic Markdown chunk, the LLM always receives the complete schema. It can reliably execute arithmetic, compare quarters, and maintain 100\% financial fidelity.
+\end{itemize}
+
+\subsubsection{Why Specialized Diagram Handling Matters}
+\begin{itemize}[leftmargin=1.0cm]
+\item \textbf{Detecting Vector Graphics:} Standard PDF libraries only look for raster images (JPEG/PNG), completely missing vector drawings (lines, rectangles, and flowchart arrows created with PDF draw operators). Our census uses \texttt{page.get\_drawings()} to identify visual schematics and trigger rendering.
+\item \textbf{Dual-Signal Retrieval:} CLIP enables sub-millisecond visual vector search without OCR, while BLIP generates textual descriptions that allow traditional TF-IDF keyword search to match diagrams.
+\item \textbf{Direct Visual Reasoning with Token Budgeting:} By passing downscaled high-resolution thumbnails ($700\times700$, $\sim$1,800 tokens) to the multimodal LLM, the model inspects arrow directions, legends, and chart axes directly while strictly adhering to cloud API rate limits (7,000 ITPM).
+\end{itemize}
+
+
 \subsection{Step 5 -- Dense and vision indexing (Embedded Qdrant)}
 \textbf{Tech:} MiniLM-L6-v2 (384-d, L2-normalized), \textbf{Embedded Qdrant HNSW}, CLIP ViT-B/32 (512-d), NumPy row stores (\texttt{embeddings.py}).\\
 \textbf{Does:} Dense embeddings are indexed into an Embedded Qdrant collection (\texttt{pdf\_chunks}) using Cosine distance and HNSW graph indexing with \texttt{doc\_id} payload filtering. NumPy \texttt{.npy} files are maintained as secondary local backups.\\
